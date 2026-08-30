@@ -341,6 +341,16 @@ struct ioctl_check_and_request_bridge_shutdown_args
   bool ret_should_shutdown;
 };
 
+struct ioctl_add_unlink_daemon_args
+{
+  bool ret_already_exists;
+};
+
+struct ioctl_unlink_daemon_should_exit_args
+{
+  bool ret_should_exit;
+};
+
 struct ioctl_set_ros2_subscriber_num_args
 {
   struct name_info topic_name;
@@ -377,5 +387,8 @@ struct ioctl_set_ros2_publisher_num_args
   _IOW(0xA6, 25, struct ioctl_set_ros2_subscriber_num_args)
 #define AGNOCAST_SET_ROS2_PUBLISHER_NUM_CMD _IOW(0xA6, 26, struct ioctl_set_ros2_publisher_num_args)
 #define AGNOCAST_NOTIFY_BRIDGE_SHUTDOWN_CMD _IO(0xA6, 27)
+#define AGNOCAST_ADD_UNLINK_DAEMON_CMD _IOWR(0xA6, 32, struct ioctl_add_unlink_daemon_args)
+#define AGNOCAST_UNLINK_DAEMON_SHOULD_EXIT_CMD \
+  _IOR(0xA6, 33, struct ioctl_unlink_daemon_should_exit_args)
 
 }  // namespace agnocast

@@ -29,6 +29,17 @@ static void remove_all_process_info(void)
   // No explicit synchronize_rcu() needed: kfree_rcu() defers freeing until after the grace period.
 }
 
+static void remove_all_unlink_daemons(void)
+{
+  struct unlink_daemon_info * daemon;
+  int bkt;
+  struct hlist_node * tmp;
+  hash_for_each_safe(unlink_daemon_htable, bkt, tmp, daemon, node)
+  {
+    agnocast_release_unlink_daemon(daemon);
+  }
+}
+
 static void remove_all_discovery_agents(void)
 {
   struct discovery_agent_info * agent;
@@ -74,6 +85,7 @@ void agnocast_exit_free_data(void)
   down_write(&global_htables_rwsem);
   remove_all_topics();
   remove_all_process_info();
+  remove_all_unlink_daemons();
   remove_all_discovery_agents();
   remove_all_bridge_info();
   remove_all_domain_rules();

@@ -658,7 +658,12 @@ int agnocast_ioctl_add_process(
     ret = -EINVAL;
     goto unlock;
   }
-  ioctl_ret->ret_unlink_daemon_exist = (get_process_num(ipc_ns) > 0);
+  struct unlink_daemon_info * unlink_daemon = agnocast_find_unlink_daemon(ipc_ns);
+  if (unlink_daemon && !agnocast_unlink_daemon_is_alive(unlink_daemon)) {
+    agnocast_release_unlink_daemon(unlink_daemon);
+    unlink_daemon = NULL;
+  }
+  ioctl_ret->ret_unlink_daemon_exist = (unlink_daemon != NULL);
   ioctl_ret->ret_performance_bridge_daemon_exist =
     has_alive_performance_bridge_manager(ipc_ns, domain_id);
   ioctl_ret->ret_discovery_agent_exist = (agnocast_find_discovery_agent(ipc_ns, domain_id) != NULL);
@@ -2398,6 +2403,18 @@ struct discovery_agent_info * agnocast_find_discovery_agent(
   return NULL;
 }
 
+// Caller holds global_htables_rwsem (read or write).
+struct unlink_daemon_info * agnocast_find_unlink_daemon(const struct ipc_namespace * ipc_ns)
+{
+  struct unlink_daemon_info * daemon;
+  int bkt;
+  hash_for_each(unlink_daemon_htable, bkt, daemon, node)
+  {
+    if (ipc_eq(daemon->ipc_ns, ipc_ns)) return daemon;
+  }
+  return NULL;
+}
+
 // The agent is not a registered Agnocast process, so it passes its own pid + ROS_DOMAIN_ID.
 //
 // commit == false: read-only idle poll; userspace counts consecutive idle polls before exiting.
@@ -2468,6 +2485,62 @@ int agnocast_ioctl_discovery_agent_exists(
   *ret_exists = (agnocast_find_discovery_agent(ipc_ns, domain_id) != NULL);
   up_read(&global_htables_rwsem);
   return 0;
+}
+
+int agnocast_ioctl_add_unlink_daemon(
+  const pid_t pid, struct pid * pid_ref, const struct ipc_namespace * ipc_ns,
+  struct ioctl_add_unlink_daemon_args * ioctl_ret)
+{
+  int ret = 0;
+  ioctl_ret->ret_already_exists = false;
+  if (pid_ref == NULL) return -EINVAL;
+
+  down_write(&global_htables_rwsem);
+  struct unlink_daemon_info * existing = agnocast_find_unlink_daemon(ipc_ns);
+  if (existing && agnocast_unlink_daemon_is_alive(existing)) {
+    ioctl_ret->ret_already_exists = true;
+    goto unlock;
+  }
+  if (existing) agnocast_release_unlink_daemon(existing);
+
+  struct unlink_daemon_info * daemon = kmalloc(sizeof(*daemon), GFP_KERNEL);
+  if (!daemon) {
+    ret = -ENOMEM;
+    goto unlock;
+  }
+  daemon->global_pid = pid;
+  daemon->pid_ref = get_pid(pid_ref);
+  daemon->ipc_ns = ipc_ns;
+  INIT_HLIST_NODE(&daemon->node);
+  hash_add_rcu(unlink_daemon_htable, &daemon->node, hash_min(pid, UNLINK_DAEMON_HASH_BITS));
+
+unlock:
+  up_write(&global_htables_rwsem);
+  return ret;
+}
+
+int agnocast_ioctl_unlink_daemon_should_exit(
+  const pid_t pid, const struct pid * pid_ref, const struct ipc_namespace * ipc_ns,
+  bool * ret_should_exit)
+{
+  int ret = 0;
+  *ret_should_exit = false;
+
+  down_write(&global_htables_rwsem);
+  struct unlink_daemon_info * daemon = agnocast_find_unlink_daemon(ipc_ns);
+  if (!daemon || daemon->global_pid != pid || daemon->pid_ref != pid_ref) {
+    ret = -EPERM;
+    goto unlock;
+  }
+
+  if (get_process_num(ipc_ns) == 0) {
+    agnocast_release_unlink_daemon(daemon);
+    *ret_should_exit = true;
+  }
+
+unlock:
+  up_write(&global_htables_rwsem);
+  return ret;
 }
 
 int agnocast_ioctl_check_and_request_bridge_shutdown(
@@ -3152,6 +3225,30 @@ static long discovery_agent_exists_cmd(struct ioctl_discovery_agent_exists_args 
   return ret;
 }
 
+static long add_unlink_daemon_cmd(struct ioctl_add_unlink_daemon_args __user * arg)
+{
+  const pid_t pid = current->tgid;
+  const struct ipc_namespace * ipc_ns = current->nsproxy->ipc_ns;
+  struct ioctl_add_unlink_daemon_args args;
+  if (copy_from_user(&args, arg, sizeof(args))) return -EFAULT;
+
+  int ret = agnocast_ioctl_add_unlink_daemon(pid, task_tgid(current), ipc_ns, &args);
+  if (copy_to_user(arg, &args, sizeof(args))) return -EFAULT;
+  return ret;
+}
+
+static long unlink_daemon_should_exit_cmd(
+  struct ioctl_unlink_daemon_should_exit_args __user * arg)
+{
+  const pid_t pid = current->tgid;
+  const struct ipc_namespace * ipc_ns = current->nsproxy->ipc_ns;
+  struct ioctl_unlink_daemon_should_exit_args args = {};
+  int ret = agnocast_ioctl_unlink_daemon_should_exit(
+    pid, task_tgid(current), ipc_ns, &args.ret_should_exit);
+  if (copy_to_user(arg, &args, sizeof(args))) return -EFAULT;
+  return ret;
+}
+
 long agnocast_ioctl(struct file * file, unsigned int cmd, unsigned long arg)
 {
   switch (cmd) {
@@ -3217,6 +3314,11 @@ long agnocast_ioctl(struct file * file, unsigned int cmd, unsigned long arg)
       return add_discovery_agent_cmd((struct ioctl_add_discovery_agent_args __user *)arg);
     case AGNOCAST_DISCOVERY_AGENT_EXISTS_CMD:
       return discovery_agent_exists_cmd((struct ioctl_discovery_agent_exists_args __user *)arg);
+    case AGNOCAST_ADD_UNLINK_DAEMON_CMD:
+      return add_unlink_daemon_cmd((struct ioctl_add_unlink_daemon_args __user *)arg);
+    case AGNOCAST_UNLINK_DAEMON_SHOULD_EXIT_CMD:
+      return unlink_daemon_should_exit_cmd(
+        (struct ioctl_unlink_daemon_should_exit_args __user *)arg);
     default:
       return -EINVAL;
   }
@@ -3306,6 +3408,20 @@ int agnocast_get_discovery_agent_num(void)
   // Serialize against the exit path's hash_del_rcu()+kfree_rcu(), which runs under the write lock.
   down_read(&global_htables_rwsem);
   hash_for_each(discovery_agent_htable, bkt, agent, node)
+  {
+    count++;
+  }
+  up_read(&global_htables_rwsem);
+  return count;
+}
+
+int agnocast_get_unlink_daemon_num(void)
+{
+  int count = 0;
+  struct unlink_daemon_info * daemon;
+  int bkt;
+  down_read(&global_htables_rwsem);
+  hash_for_each(unlink_daemon_htable, bkt, daemon, node)
   {
     count++;
   }

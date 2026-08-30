@@ -8,6 +8,7 @@ struct device * agnocast_device;
 DECLARE_RWSEM(global_htables_rwsem);
 
 DEFINE_HASHTABLE(proc_info_htable, PROC_INFO_HASH_BITS);
+DEFINE_HASHTABLE(unlink_daemon_htable, UNLINK_DAEMON_HASH_BITS);
 DEFINE_HASHTABLE(discovery_agent_htable, DISCOVERY_AGENT_HASH_BITS);
 DEFINE_HASHTABLE(topic_hashtable, TOPIC_HASH_BITS);
 DEFINE_HASHTABLE(bridge_htable, TOPIC_HASH_BITS);
@@ -331,11 +332,54 @@ void agnocast_remove_discovery_agent_by_pid(const pid_t pid)
   }
 }
 
-// RCU-protected check: returns true if pid is a registered agnocast process or discovery agent.
+bool agnocast_unlink_daemon_is_alive(const struct unlink_daemon_info * daemon)
+{
+  struct task_struct * task;
+  bool alive = false;
+
+  rcu_read_lock();
+  task = pid_task(daemon->pid_ref, PIDTYPE_TGID);
+  if (task != NULL) {
+    alive = pid_alive(task) && READ_ONCE(task->exit_state) == 0 && task->signal != NULL &&
+            atomic_read(&task->signal->live) > 0;
+  }
+  rcu_read_unlock();
+  return alive;
+}
+
+// Caller holds global_htables_rwsem (write).
+void agnocast_release_unlink_daemon(struct unlink_daemon_info * daemon)
+{
+  hash_del_rcu(&daemon->node);
+  put_pid(daemon->pid_ref);
+  kfree_rcu(daemon, rcu_head);
+}
+
+// Caller holds global_htables_rwsem (write). A matching live entry is retained: this can happen
+// after numeric PID reuse, and must not let an old queued exit remove the new daemon generation.
+bool agnocast_remove_unlink_daemon_by_pid(const pid_t pid)
+{
+  struct unlink_daemon_info * daemon;
+  struct hlist_node * tmp;
+  hash_for_each_possible_safe(
+    unlink_daemon_htable, daemon, tmp, node, hash_min(pid, UNLINK_DAEMON_HASH_BITS))
+  {
+    if (daemon->global_pid == pid) {
+      if (!agnocast_unlink_daemon_is_alive(daemon)) {
+        agnocast_release_unlink_daemon(daemon);
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
+// RCU-protected check: returns true for every process whose exit requires registry cleanup.
 bool is_agnocast_pid(const pid_t pid)
 {
   struct process_info * proc_info;
   struct discovery_agent_info * agent;
+  struct unlink_daemon_info * daemon;
   bool found = false;
   rcu_read_lock();
   hash_for_each_possible_rcu(proc_info_htable, proc_info, node, hash_min(pid, PROC_INFO_HASH_BITS))
@@ -355,6 +399,16 @@ bool is_agnocast_pid(const pid_t pid)
       }
     }
   }
+  if (!found) {
+    hash_for_each_possible_rcu(
+      unlink_daemon_htable, daemon, node, hash_min(pid, UNLINK_DAEMON_HASH_BITS))
+    {
+      if (daemon->global_pid == pid) {
+        found = true;
+        break;
+      }
+    }
+  }
   rcu_read_unlock();
   return found;
 }
@@ -364,6 +418,13 @@ bool is_agnocast_pid(const pid_t pid)
 void agnocast_process_exit_cleanup(const pid_t pid)
 {
   down_write(&global_htables_rwsem);
+
+  // Unlink daemons are not application processes. Returning after their registry cleanup also
+  // prevents an old daemon exit event from touching a live app that reused the numeric PID.
+  if (agnocast_remove_unlink_daemon_by_pid(pid)) {
+    up_write(&global_htables_rwsem);
+    return;
+  }
 
   // The discovery agent is tracked outside proc_info and has no proc_info entry, so drain it
   // here before the proc_info lookup (which would otherwise return early for the agent's pid).

@@ -184,6 +184,14 @@ initialize_agnocast_result acquire_agnocast_resources_for_bridge()
 
 void poll_for_unlink()
 {
+  struct ioctl_add_unlink_daemon_args add_daemon_args = {};
+  if (ioctl(agnocast_fd, AGNOCAST_ADD_UNLINK_DAEMON_CMD, &add_daemon_args) < 0) {
+    RCLCPP_ERROR(logger, "AGNOCAST_ADD_UNLINK_DAEMON_CMD failed: %s", strerror(errno));
+    close(agnocast_fd);
+    exit(EXIT_FAILURE);
+  }
+  if (add_daemon_args.ret_already_exists) return;
+
   std::vector<exit_subscription_mq_info> mq_info_buf(MAX_SUBSCRIPTION_NUM_PER_PROCESS);
 
   while (true) {
@@ -218,7 +226,14 @@ void poll_for_unlink()
     } while (get_exit_process_args.ret_pid > 0);
 
     if (get_exit_process_args.ret_daemon_should_exit) {
-      break;
+      struct ioctl_unlink_daemon_should_exit_args should_exit_args = {};
+      if (ioctl(agnocast_fd, AGNOCAST_UNLINK_DAEMON_SHOULD_EXIT_CMD, &should_exit_args) < 0) {
+        RCLCPP_ERROR(
+          logger, "AGNOCAST_UNLINK_DAEMON_SHOULD_EXIT_CMD failed: %s", strerror(errno));
+        close(agnocast_fd);
+        exit(EXIT_FAILURE);
+      }
+      if (should_exit_args.ret_should_exit) break;
     }
   }
 

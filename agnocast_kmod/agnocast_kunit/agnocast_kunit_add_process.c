@@ -6,6 +6,7 @@
 
 #include <kunit/test.h>
 #include <linux/delay.h>
+#include <linux/sched/signal.h>
 
 static pid_t pid = 1000;
 void test_case_add_process_normal(struct kunit * test)
@@ -17,6 +18,7 @@ void test_case_add_process_normal(struct kunit * test)
   int ret = agnocast_ioctl_add_process(local_pid, current->nsproxy->ipc_ns, false, 0, &args);
 
   KUNIT_EXPECT_EQ(test, ret, 0);
+  KUNIT_EXPECT_FALSE(test, args.ret_unlink_daemon_exist);
   KUNIT_EXPECT_EQ(test, agnocast_get_alive_proc_num(), 1);
   KUNIT_EXPECT_FALSE(test, agnocast_is_proc_exited(local_pid));
 }
@@ -62,6 +64,77 @@ void test_case_add_process_twice(struct kunit * test)
   KUNIT_EXPECT_EQ(test, ret2, -EINVAL);
   KUNIT_EXPECT_EQ(test, agnocast_get_alive_proc_num(), 1);
   KUNIT_EXPECT_FALSE(test, agnocast_is_proc_exited(local_pid));
+}
+
+// The first daemon claim wins, and only an actual registered daemon suppresses a spawn.
+void test_case_unlink_daemon_registry_gates_spawn(struct kunit * test)
+{
+  KUNIT_ASSERT_EQ(test, agnocast_get_alive_proc_num(), 0);
+  KUNIT_ASSERT_EQ(test, agnocast_get_unlink_daemon_num(), 0);
+
+  struct ioctl_add_unlink_daemon_args first = {};
+  KUNIT_ASSERT_EQ(
+    test,
+    agnocast_ioctl_add_unlink_daemon(
+      current->tgid, task_tgid(current), current->nsproxy->ipc_ns, &first),
+    0);
+  KUNIT_EXPECT_FALSE(test, first.ret_already_exists);
+  KUNIT_EXPECT_EQ(test, agnocast_get_unlink_daemon_num(), 1);
+
+  struct ioctl_add_unlink_daemon_args duplicate = {};
+  KUNIT_ASSERT_EQ(
+    test,
+    agnocast_ioctl_add_unlink_daemon(
+      current->tgid, task_tgid(current), current->nsproxy->ipc_ns, &duplicate),
+    0);
+  KUNIT_EXPECT_TRUE(test, duplicate.ret_already_exists);
+  KUNIT_EXPECT_EQ(test, agnocast_get_unlink_daemon_num(), 1);
+
+  union ioctl_add_process_args app = {};
+  KUNIT_ASSERT_EQ(
+    test, agnocast_ioctl_add_process(pid++, current->nsproxy->ipc_ns, false, 0, &app), 0);
+  KUNIT_EXPECT_TRUE(test, app.ret_unlink_daemon_exist);
+}
+
+// add_process and the daemon's final deregistration share one write lock: an app added first
+// vetoes exit, while an exit committed first makes the app request a replacement.
+void test_case_unlink_daemon_exit_add_ordering(struct kunit * test)
+{
+  struct ioctl_add_unlink_daemon_args daemon = {};
+  KUNIT_ASSERT_EQ(
+    test,
+    agnocast_ioctl_add_unlink_daemon(
+      current->tgid, task_tgid(current), current->nsproxy->ipc_ns, &daemon),
+    0);
+
+  bool should_exit = false;
+  KUNIT_ASSERT_EQ(
+    test,
+    agnocast_ioctl_unlink_daemon_should_exit(
+      current->tgid, task_tgid(current), current->nsproxy->ipc_ns, &should_exit),
+    0);
+  KUNIT_EXPECT_TRUE(test, should_exit);
+  KUNIT_EXPECT_EQ(test, agnocast_get_unlink_daemon_num(), 0);
+
+  union ioctl_add_process_args app = {};
+  KUNIT_ASSERT_EQ(
+    test, agnocast_ioctl_add_process(pid++, current->nsproxy->ipc_ns, false, 0, &app), 0);
+  KUNIT_EXPECT_FALSE(test, app.ret_unlink_daemon_exist);
+
+  struct ioctl_add_unlink_daemon_args replacement = {};
+  KUNIT_ASSERT_EQ(
+    test,
+    agnocast_ioctl_add_unlink_daemon(
+      current->tgid, task_tgid(current), current->nsproxy->ipc_ns, &replacement),
+    0);
+  should_exit = true;
+  KUNIT_ASSERT_EQ(
+    test,
+    agnocast_ioctl_unlink_daemon_should_exit(
+      current->tgid, task_tgid(current), current->nsproxy->ipc_ns, &should_exit),
+    0);
+  KUNIT_EXPECT_FALSE(test, should_exit);
+  KUNIT_EXPECT_EQ(test, agnocast_get_unlink_daemon_num(), 1);
 }
 
 // A performance bridge manager is gated per-(ipc_ns, domain): a manager in one

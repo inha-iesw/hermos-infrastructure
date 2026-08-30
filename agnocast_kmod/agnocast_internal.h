@@ -11,7 +11,9 @@
 #include <linux/kthread.h>
 #include <linux/mm.h>  // kvzalloc, kvfree
 #include <linux/module.h>
+#include <linux/pid.h>
 #include <linux/rwsem.h>
+#include <linux/sched/signal.h>
 #include <linux/slab.h>  // kmalloc, kfree
 #include <linux/tracepoint.h>
 #include <linux/version.h>
@@ -46,6 +48,7 @@ extern struct rw_semaphore global_htables_rwsem;
 #define PROC_INFO_HASH_BITS 10
 // At most one agent per (IPC namespace, domain), so the table is tiny.
 #define DISCOVERY_AGENT_HASH_BITS 4
+#define UNLINK_DAEMON_HASH_BITS 4
 
 // Allocated in pre_handler_subscriber_exit(), freed in agnocast_commit_exit_process() after
 // the daemon successfully copies the data to user-space.
@@ -78,6 +81,17 @@ struct process_info
 };
 
 extern DECLARE_HASHTABLE(proc_info_htable, PROC_INFO_HASH_BITS);
+
+struct unlink_daemon_info
+{
+  pid_t global_pid;
+  struct pid * pid_ref;
+  const struct ipc_namespace * ipc_ns;
+  struct hlist_node node;
+  struct rcu_head rcu_head;
+};
+
+extern DECLARE_HASHTABLE(unlink_daemon_htable, UNLINK_DAEMON_HASH_BITS);
 
 struct publisher_info
 {
@@ -222,6 +236,13 @@ extern DECLARE_HASHTABLE(discovery_agent_htable, DISCOVERY_AGENT_HASH_BITS);
 struct discovery_agent_info * agnocast_find_discovery_agent(
   const struct ipc_namespace * ipc_ns, const uint32_t domain_id);
 void agnocast_remove_discovery_agent_by_pid(const pid_t pid);
+
+// All registry operations require global_htables_rwsem. The liveness check also pins the
+// daemon's struct pid identity, so a recycled numeric PID cannot validate a stale owner.
+struct unlink_daemon_info * agnocast_find_unlink_daemon(const struct ipc_namespace * ipc_ns);
+bool agnocast_unlink_daemon_is_alive(const struct unlink_daemon_info * daemon);
+void agnocast_release_unlink_daemon(struct unlink_daemon_info * daemon);
+bool agnocast_remove_unlink_daemon_by_pid(const pid_t pid);
 
 int agnocast_get_size_sub_info_htable(struct topic_wrapper * wrapper);
 

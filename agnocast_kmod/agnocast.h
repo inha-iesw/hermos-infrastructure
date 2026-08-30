@@ -302,6 +302,16 @@ struct ioctl_discovery_agent_exists_args
     ret_exists;  // whether an agent is registered for this (ns, domain); read-only liveness query
 };
 
+struct ioctl_add_unlink_daemon_args
+{
+  bool ret_already_exists;
+};
+
+struct ioctl_unlink_daemon_should_exit_args
+{
+  bool ret_should_exit;
+};
+
 struct ioctl_set_ros2_subscriber_num_args
 {
   struct name_info topic_name;
@@ -352,6 +362,9 @@ struct ioctl_add_domain_bridge_args
 #define AGNOCAST_ADD_DISCOVERY_AGENT_CMD _IOWR(0xA6, 30, struct ioctl_add_discovery_agent_args)
 #define AGNOCAST_DISCOVERY_AGENT_EXISTS_CMD \
   _IOWR(0xA6, 31, struct ioctl_discovery_agent_exists_args)
+#define AGNOCAST_ADD_UNLINK_DAEMON_CMD _IOWR(0xA6, 32, struct ioctl_add_unlink_daemon_args)
+#define AGNOCAST_UNLINK_DAEMON_SHOULD_EXIT_CMD \
+  _IOR(0xA6, 33, struct ioctl_unlink_daemon_should_exit_args)
 
 // ================================================
 // ros2cli ioctls
@@ -538,6 +551,14 @@ int agnocast_ioctl_add_discovery_agent(
 int agnocast_ioctl_discovery_agent_exists(
   const struct ipc_namespace * ipc_ns, const uint32_t domain_id, bool * ret_exists);
 
+int agnocast_ioctl_add_unlink_daemon(
+  const pid_t pid, struct pid * pid_ref, const struct ipc_namespace * ipc_ns,
+  struct ioctl_add_unlink_daemon_args * ioctl_ret);
+
+int agnocast_ioctl_unlink_daemon_should_exit(
+  const pid_t pid, const struct pid * pid_ref, const struct ipc_namespace * ipc_ns,
+  bool * ret_should_exit);
+
 int agnocast_ioctl_get_exit_process(
   const struct ipc_namespace * ipc_ns, struct ioctl_get_exit_process_args * ioctl_ret,
   struct exit_subscription_mq_info * mq_info_buf, uint32_t mq_info_buf_size,
@@ -561,6 +582,7 @@ int agnocast_increment_message_entry_rc(
   const int64_t entry_id);
 int agnocast_get_alive_proc_num(void);
 int agnocast_get_discovery_agent_num(void);
+int agnocast_get_unlink_daemon_num(void);
 bool agnocast_is_proc_exited(const pid_t pid);
 int agnocast_get_topic_entries_num(const char * topic_name, const struct ipc_namespace * ipc_ns);
 int64_t agnocast_get_latest_received_entry_id(
