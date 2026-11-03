@@ -15,7 +15,18 @@ namespace hermos
 Context g_context;
 std::mutex g_context_mtx;
 
+namespace
+{
+// Protected by g_context_mtx; signal-driven context invalidation does not release logging.
+bool g_owns_logging = false;
+}  // namespace
+
 void Context::init(int argc, char const * const * argv)
+{
+  init(argc, argv, InitOptions{});
+}
+
+void Context::init(int argc, char const * const * argv, const InitOptions & options)
 {
   if (initialized_) {
     return;
@@ -38,13 +49,15 @@ void Context::init(int argc, char const * const * argv)
   // --disable-external-lib-logs from parsed_arguments_ and registers only the
   // enabled sub-handlers inside rcl_logging_multiple_output_handler, so stdout
   // can be suppressed while file logging via spdlog is preserved.
-  rcl_allocator_t allocator = rcl_get_default_allocator();
-  rcl_ret_t ret = rcl_logging_configure_with_output_handler(
-    parsed_arguments_.get(), &allocator, rcl_logging_multiple_output_handler);
-  if (ret != RCL_RET_OK) {
-    RCUTILS_LOG_ERROR_NAMED(
-      "hermos", "Failed to configure logging: %s", rcl_get_error_string().str);
-    rcl_reset_error();
+  if (options.configure_logging) {
+    rcl_allocator_t allocator = rcl_get_default_allocator();
+    rcl_ret_t ret = rcl_logging_configure_with_output_handler(
+      parsed_arguments_.get(), &allocator, rcl_logging_multiple_output_handler);
+    if (ret != RCL_RET_OK) {
+      RCUTILS_LOG_ERROR_NAMED(
+        "hermos", "Failed to configure logging: %s", rcl_get_error_string().str);
+      rcl_reset_error();
+    }
   }
 
   initialized_ = true;
@@ -61,28 +74,41 @@ void Context::shutdown()
 
 void init(int argc, char const * const * argv)
 {
+  init(argc, argv, InitOptions{});
+}
+
+void init(int argc, char const * const * argv, const InitOptions & options)
+{
   {
     std::lock_guard<std::mutex> lock(g_context_mtx);
-    g_context.init(argc, argv);
+    if (!g_context.is_initialized()) {
+      g_context.init(argc, argv, options);
+      g_owns_logging = g_owns_logging || options.configure_logging;
+    }
   }
   SignalHandler::install();
 }
 
 void shutdown()
 {
+  bool finalize_logging;
   {
     std::lock_guard<std::mutex> lock(g_context_mtx);
     g_context.shutdown();
+    finalize_logging = g_owns_logging;
+    g_owns_logging = false;
   }
 
   SignalHandler::notify_all_executors();
   SignalHandler::uninstall();
 
-  rcl_ret_t ret = rcl_logging_fini();
-  if (ret != RCL_RET_OK) {
-    RCUTILS_LOG_ERROR_NAMED(
-      "hermos", "Failed to finalize logging: %s", rcl_get_error_string().str);
-    rcl_reset_error();
+  if (finalize_logging) {
+    rcl_ret_t ret = rcl_logging_fini();
+    if (ret != RCL_RET_OK) {
+      RCUTILS_LOG_ERROR_NAMED(
+        "hermos", "Failed to finalize logging: %s", rcl_get_error_string().str);
+      rcl_reset_error();
+    }
   }
 }
 
