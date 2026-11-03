@@ -147,6 +147,7 @@ if(BUILD_TESTING)
     test/unit/test_hermos_timer.cpp
     test/unit/test_hermos_timer_api.cpp
     test/unit/test_mocked_hermos.cpp
+    test/unit/test_publisher_borrow_exception.cpp
     test/unit/test_hermos_executors.cpp
     test/unit/test_hermos_epoll_event.cpp
     test/unit/test_hermos_epoll_update.cpp
@@ -168,6 +169,13 @@ if(BUILD_TESTING)
   set_tests_properties(test_unit_${PROJECT_NAME} PROPERTIES
     ENVIRONMENT "GTEST_DEATH_TEST_STYLE=threadsafe"
   )
+
+  ament_add_gmock(test_unit_publisher_borrow_allocation_failure_${PROJECT_NAME}
+    test/unit/test_publisher_borrow_allocation_failure.cpp)
+  target_include_directories(test_unit_publisher_borrow_allocation_failure_${PROJECT_NAME}
+    PRIVATE include src)
+  target_link_libraries(test_unit_publisher_borrow_allocation_failure_${PROJECT_NAME} hermos)
+  ament_target_dependencies(test_unit_publisher_borrow_allocation_failure_${PROJECT_NAME} rclcpp)
 
   # tf2 broadcaster unit tests (own kmod / publish_core mocks for TFMessage capture)
   ament_add_gmock(test_unit_tf2_broadcasters_${PROJECT_NAME}

@@ -15,6 +15,7 @@
 #include <unistd.h>
 
 #include <cstdint>
+#include <memory>
 #include <mutex>
 
 namespace hermos
@@ -196,13 +197,22 @@ public:
    * pass the returned pointer to publish() or let it go out of scope (which frees the memory).
    *
    * @return Owned pointer to the newly allocated message in shared memory.
+   * @throws Any exception raised while allocating the message or its ownership metadata. The
+   * borrow counter is rolled back, and any fully constructed message is destroyed first.
    */
   HERMOS_PUBLIC
   ipc_shared_ptr<MessageT> borrow_loaned_message()
   {
     increment_borrowed_publisher_num();
-    MessageT * ptr = new MessageT();
-    return ipc_shared_ptr<MessageT>(ptr, topic_name_.c_str(), id_);
+    try {
+      auto storage = std::make_unique<MessageT>();
+      auto message = ipc_shared_ptr<MessageT>(storage.get(), topic_name_, id_);
+      storage.release();
+      return message;
+    } catch (...) {
+      decrement_borrowed_publisher_num();
+      throw;
+    }
   }
 
   /**
