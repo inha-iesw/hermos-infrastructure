@@ -14,6 +14,9 @@ description = "A heap runtime replacement for HERMOS"
 [lib]
 crate-type = ["cdylib"]
 
+[features]
+test-observation = []
+
 [dependencies]
 libc = "0.2"
 # `unstable` exposes `allocation_usable_size`, used to find a freed block's extent for

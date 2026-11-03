@@ -40,7 +40,23 @@ static RESOLVE_START_MAIN: extern "C" fn() = {
 };
 
 mod reclaim;
+#[cfg(feature = "test-observation")]
+mod test_observation;
 mod tlsf;
+
+// Compile the wrapper out entirely unless test instrumentation was requested.
+macro_rules! observed_allocation {
+    ($ptr:expr, $size:expr, $shared:expr, $allocate:expr) => {{
+        #[cfg(feature = "test-observation")]
+        {
+            test_observation::allocate($ptr, $size, $shared, || $allocate)
+        }
+        #[cfg(not(feature = "test-observation"))]
+        {
+            $allocate
+        }
+    }};
+}
 
 /// Version string exported as a C-compatible symbol for external querying.
 /// Can be read via `dlsym` or `nm -D` on the shared library.
@@ -531,7 +547,9 @@ pub unsafe extern "C" fn __libc_start_main(
 #[no_mangle]
 pub extern "C" fn malloc(size: usize) -> *mut c_void {
     if should_use_heap() {
-        return unsafe { (*ORIGINAL_MALLOC.get_or_init(init_original_malloc))(size) };
+        return observed_allocation!(ptr::null_mut(), size, false, unsafe {
+            (*ORIGINAL_MALLOC.get_or_init(init_original_malloc))(size)
+        });
     }
 
     let layout = match Layout::from_size_align(size, MIN_ALIGN) {
@@ -539,15 +557,20 @@ pub extern "C" fn malloc(size: usize) -> *mut c_void {
         Err(_) => return ptr::null_mut(),
     };
 
-    match HERMOS_SHARED_MEMORY_ALLOCATOR
-        .get()
-        .unwrap()
-        .inner
-        .allocate(layout)
-    {
-        Some(non_null_ptr) => non_null_ptr.as_ptr().cast(),
-        None => ptr::null_mut(),
-    }
+    observed_allocation!(
+        ptr::null_mut(),
+        size,
+        true,
+        match HERMOS_SHARED_MEMORY_ALLOCATOR
+            .get()
+            .unwrap()
+            .inner
+            .allocate(layout)
+        {
+            Some(non_null_ptr) => non_null_ptr.as_ptr().cast(),
+            None => ptr::null_mut(),
+        }
+    )
 }
 
 /// # Safety
@@ -559,6 +582,8 @@ pub unsafe extern "C" fn free(ptr: *mut c_void) {
     }
 
     if !is_shared(ptr.cast()) {
+        #[cfg(feature = "test-observation")]
+        test_observation::notify(2, ptr, 0, false);
         return (*ORIGINAL_FREE.get_or_init(init_original_free))(ptr);
     }
 
@@ -569,6 +594,8 @@ pub unsafe extern "C" fn free(ptr: *mut c_void) {
 
     let non_null_ptr = unsafe { NonNull::new_unchecked(ptr.cast()) };
 
+    #[cfg(feature = "test-observation")]
+    test_observation::notify(2, ptr, 0, true);
     HERMOS_SHARED_MEMORY_ALLOCATOR
         .get()
         .unwrap()
@@ -579,6 +606,12 @@ pub unsafe extern "C" fn free(ptr: *mut c_void) {
 #[no_mangle]
 pub extern "C" fn calloc(num: usize, size: usize) -> *mut c_void {
     if should_use_heap() {
+        #[cfg(feature = "test-observation")]
+        if let Some(total) = num.checked_mul(size) {
+            return observed_allocation!(ptr::null_mut(), total, false, unsafe {
+                (*ORIGINAL_CALLOC.get_or_init(init_original_calloc))(num, size)
+            });
+        }
         return unsafe { (*ORIGINAL_CALLOC.get_or_init(init_original_calloc))(num, size) };
     }
 
@@ -591,21 +624,26 @@ pub extern "C" fn calloc(num: usize, size: usize) -> *mut c_void {
         Err(_) => return ptr::null_mut(),
     };
 
-    match HERMOS_SHARED_MEMORY_ALLOCATOR
-        .get()
-        .unwrap()
-        .inner
-        .allocate(layout)
-    {
-        Some(non_null_ptr) => {
-            let ptr = non_null_ptr.as_ptr();
-            unsafe {
-                ptr::write_bytes(ptr, 0, size);
+    observed_allocation!(
+        ptr::null_mut(),
+        size,
+        true,
+        match HERMOS_SHARED_MEMORY_ALLOCATOR
+            .get()
+            .unwrap()
+            .inner
+            .allocate(layout)
+        {
+            Some(non_null_ptr) => {
+                let ptr = non_null_ptr.as_ptr();
+                unsafe {
+                    ptr::write_bytes(ptr, 0, size);
+                }
+                ptr.cast()
             }
-            ptr.cast()
+            None => ptr::null_mut(),
         }
-        None => ptr::null_mut(),
-    }
+    )
 }
 
 /// # Safety
@@ -618,7 +656,12 @@ pub unsafe extern "C" fn realloc(ptr: *mut c_void, new_size: usize) -> *mut c_vo
     }
 
     if !is_shared(ptr.cast()) {
-        return (*ORIGINAL_REALLOC.get_or_init(init_original_realloc))(ptr, new_size);
+        return observed_allocation!(
+            ptr,
+            new_size,
+            false,
+            (*ORIGINAL_REALLOC.get_or_init(init_original_realloc))(ptr, new_size)
+        );
     }
 
     if should_use_heap() {
@@ -633,25 +676,42 @@ pub unsafe extern "C" fn realloc(ptr: *mut c_void, new_size: usize) -> *mut c_vo
         Err(_) => return ptr::null_mut(),
     };
 
-    match HERMOS_SHARED_MEMORY_ALLOCATOR
-        .get()
-        .unwrap()
-        .inner
-        .reallocate(non_null_ptr, new_layout)
-    {
-        Some(non_null_ptr) => non_null_ptr.as_ptr().cast(),
-        None => ptr::null_mut(),
-    }
+    observed_allocation!(
+        ptr,
+        new_size,
+        true,
+        match HERMOS_SHARED_MEMORY_ALLOCATOR
+            .get()
+            .unwrap()
+            .inner
+            .reallocate(non_null_ptr, new_layout)
+        {
+            Some(non_null_ptr) => non_null_ptr.as_ptr().cast(),
+            None => ptr::null_mut(),
+        }
+    )
 }
 
 #[no_mangle]
 pub extern "C" fn posix_memalign(memptr: &mut *mut c_void, alignment: usize, size: usize) -> i32 {
     if should_use_heap() {
-        return unsafe {
+        #[cfg(feature = "test-observation")]
+        if alignment.is_power_of_two()
+            && alignment % size_of::<*mut c_void>() == 0
+            && test_observation::notify(0, ptr::null_mut(), size, false)
+        {
+            return libc::ENOMEM;
+        }
+        let result = unsafe {
             (*ORIGINAL_POSIX_MEMALIGN.get_or_init(init_original_posix_memalign))(
                 memptr, alignment, size,
             )
         };
+        #[cfg(feature = "test-observation")]
+        if result == 0 && !memptr.is_null() {
+            test_observation::notify(1, *memptr, size, false);
+        }
+        return result;
     }
 
     // `alignment` must be a power of two and a multiple of `sizeof(void *)`.
@@ -664,6 +724,10 @@ pub extern "C" fn posix_memalign(memptr: &mut *mut c_void, alignment: usize, siz
         Err(_) => return libc::ENOMEM,
     };
 
+    #[cfg(feature = "test-observation")]
+    if test_observation::notify(0, ptr::null_mut(), size, true) {
+        return libc::ENOMEM;
+    }
     match HERMOS_SHARED_MEMORY_ALLOCATOR
         .get()
         .unwrap()
@@ -672,6 +736,8 @@ pub extern "C" fn posix_memalign(memptr: &mut *mut c_void, alignment: usize, siz
     {
         Some(non_null_ptr) => {
             *memptr = non_null_ptr.as_ptr().cast();
+            #[cfg(feature = "test-observation")]
+            test_observation::notify(1, *memptr, size, true);
             0
         }
         None => libc::ENOMEM,
@@ -681,9 +747,15 @@ pub extern "C" fn posix_memalign(memptr: &mut *mut c_void, alignment: usize, siz
 #[no_mangle]
 pub extern "C" fn aligned_alloc(alignment: usize, size: usize) -> *mut c_void {
     if should_use_heap() {
-        return unsafe {
+        #[cfg(feature = "test-observation")]
+        if !alignment.is_power_of_two() || size & (alignment - 1) != 0 {
+            return unsafe {
+                (*ORIGINAL_ALIGNED_ALLOC.get_or_init(init_original_aligned_alloc))(alignment, size)
+            };
+        }
+        return observed_allocation!(ptr::null_mut(), size, false, unsafe {
             (*ORIGINAL_ALIGNED_ALLOC.get_or_init(init_original_aligned_alloc))(alignment, size)
-        };
+        });
     }
 
     // `alignment` should be a power of two and `size` should be a multiple of `alignment`.
@@ -696,23 +768,34 @@ pub extern "C" fn aligned_alloc(alignment: usize, size: usize) -> *mut c_void {
         Err(_) => return ptr::null_mut(),
     };
 
-    match HERMOS_SHARED_MEMORY_ALLOCATOR
-        .get()
-        .unwrap()
-        .inner
-        .allocate(layout)
-    {
-        Some(non_null_ptr) => non_null_ptr.as_ptr().cast(),
-        None => std::ptr::null_mut(),
-    }
+    observed_allocation!(
+        ptr::null_mut(),
+        size,
+        true,
+        match HERMOS_SHARED_MEMORY_ALLOCATOR
+            .get()
+            .unwrap()
+            .inner
+            .allocate(layout)
+        {
+            Some(non_null_ptr) => non_null_ptr.as_ptr().cast(),
+            None => std::ptr::null_mut(),
+        }
+    )
 }
 
 #[no_mangle]
 pub extern "C" fn memalign(alignment: usize, size: usize) -> *mut c_void {
     if should_use_heap() {
-        return unsafe {
+        #[cfg(feature = "test-observation")]
+        if !alignment.is_power_of_two() {
+            return unsafe {
+                (*ORIGINAL_MEMALIGN.get_or_init(init_original_memalign))(alignment, size)
+            };
+        }
+        return observed_allocation!(ptr::null_mut(), size, false, unsafe {
             (*ORIGINAL_MEMALIGN.get_or_init(init_original_memalign))(alignment, size)
-        };
+        });
     }
 
     // `alignment` must be a power of two.
@@ -721,15 +804,20 @@ pub extern "C" fn memalign(alignment: usize, size: usize) -> *mut c_void {
         Err(_) => return ptr::null_mut(),
     };
 
-    match HERMOS_SHARED_MEMORY_ALLOCATOR
-        .get()
-        .unwrap()
-        .inner
-        .allocate(layout)
-    {
-        Some(non_null_ptr) => non_null_ptr.as_ptr().cast(),
-        None => std::ptr::null_mut(),
-    }
+    observed_allocation!(
+        ptr::null_mut(),
+        size,
+        true,
+        match HERMOS_SHARED_MEMORY_ALLOCATOR
+            .get()
+            .unwrap()
+            .inner
+            .allocate(layout)
+        {
+            Some(non_null_ptr) => non_null_ptr.as_ptr().cast(),
+            None => std::ptr::null_mut(),
+        }
+    )
 }
 
 #[no_mangle]
