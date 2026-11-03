@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# Local verification without loading kernel modules or changing installed packages.
+set -eo pipefail
+
+workspace_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${workspace_dir}"
+source "/opt/ros/${ROS_DISTRO:-humble}/setup.bash"
+
+verify_dir="${workspace_dir}/build/verify"
+mkdir -p "${verify_dir}/kmod"
+export CMAKE_BUILD_PARALLEL_LEVEL=2
+export MAKEFLAGS="${MAKEFLAGS:--j2}"
+export ROS_LOG_DIR="${workspace_dir}/log/verify/ros"
+
+# Keep Rust outputs separate from previously built libraries with the old name.
+export CARGO_TARGET_DIR="${verify_dir}/heaphook"
+(
+  cd hermos_heaphook
+  cargo check --offline
+  cargo test --offline
+  cargo check --offline --features test-observation
+  cargo test --offline --features test-observation
+)
+export CARGO_TARGET_DIR="${verify_dir}/cie-rust"
+(
+  cd src/hermos_cie_thread_configurator/rust
+  cargo check --offline --locked
+  cargo test --offline --locked
+)
+
+# Compile both module names in an isolated directory; never load either module.
+cp hermos_kmod/*.[ch] hermos_kmod/Makefile hermos_kmod/version.txt "${verify_dir}/kmod/"
+make -C "/lib/modules/$(uname -r)/build" M="${verify_dir}/kmod" CC="${CC:-gcc}" modules
+make -C "/lib/modules/$(uname -r)/build" M="${verify_dir}/kmod" \
+  CC="${CC:-gcc}" HERMOS_MODULE_NAME=hermos_verify modules
+
+colcon --log-base log/verify build --base-paths src \
+  --build-base build/verify/ros --install-base install/verify \
+  --executor sequential --cmake-args -DBUILD_TESTING=ON
+source install/verify/local_setup.bash
+
+# E2E launch tests are not all labelled, so select only packages with local tests.
+colcon --log-base log/verify test --base-paths src \
+  --build-base build/verify/ros --install-base install/verify \
+  --packages-select hermoslib hermos_cie_thread_configurator \
+  --executor sequential --event-handlers console_direct+ \
+  --return-code-on-test-failure \
+  --ctest-args -LE 'requires_kernel_module|requires_heaphook' --output-on-failure
+python3 -m pytest -q src/ros2hermos/test
+python3 -m pytest -q src/ros2hermos_discovery_agent/test
