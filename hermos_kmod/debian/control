@@ -1,0 +1,18 @@
+Source: hermos-kmod-v2.3.5
+Section: kernel
+Priority: optional
+Maintainer: Takahiro Ishikawa-Aso <sykwer@gmail.com>
+Homepage: https://github.com/tier4/agnocast
+Standards-Version: 4.5.0
+Build-Depends: debhelper (>= 10), dh-dkms | dkms, fakeroot, rsync, linux-headers-generic | linux-headers
+
+Package: hermos-kmod-v2.3.5
+Architecture: all
+Depends: ${misc:Depends}, dkms, linux-headers-generic | linux-headers
+Provides: hermos-kmod
+Conflicts: hermos-kmod, hermos-kmod-v2.1.0, hermos-kmod-v2.1.1, hermos-kmod-v2.1.2, hermos-kmod-v2.2.0, hermos-kmod-v2.3.0, hermos-kmod-v2.3.1, hermos-kmod-v2.3.2, hermos-kmod-v2.3.3, hermos-kmod-v2.3.4
+Replaces: hermos-kmod, hermos-kmod-v2.1.0, hermos-kmod-v2.1.1, hermos-kmod-v2.1.2, hermos-kmod-v2.2.0, hermos-kmod-v2.3.0, hermos-kmod-v2.3.1, hermos-kmod-v2.3.2, hermos-kmod-v2.3.3, hermos-kmod-v2.3.4
+Description: DKMS-based kernel module package for Hermos
+ This package provides the Hermos kernel module
+ managed via DKMS, enabling automatic rebuild upon
+ kernel updates.

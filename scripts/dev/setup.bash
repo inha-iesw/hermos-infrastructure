@@ -9,24 +9,24 @@ if [ -z "$ROS_DISTRO" ]; then
   exit 1
 fi
 
-# Check if apt-installed agnocast packages exist (conflict with source build)
+# Check if apt-installed hermos packages exist (conflict with source build)
 conflicting_pkgs=()
-for pkg in $(dpkg -l 'agnocast-heaphook-v*' 'agnocast-kmod-v*' 2>/dev/null | grep '^ii' | awk '{print $2}'); do
+for pkg in $(dpkg -l 'hermos-heaphook-v*' 'hermos-kmod-v*' 2>/dev/null | grep '^ii' | awk '{print $2}'); do
   conflicting_pkgs+=("$pkg")
 done
 
-# Check for apt-installed ROS agnocast packages
+# Check for apt-installed ROS hermos packages
 ros_pkg_names=(
-  agnocast
-  agnocast-cie-config-msgs
-  agnocast-cie-thread-configurator
-  agnocast-components
-  agnocast-e2e-test
-  agnocast-ioctl-wrapper
-  agnocastlib
-  agnocast-sample-application
-  agnocast-sample-interfaces
-  ros2agnocast
+  hermos
+  hermos-cie-config-msgs
+  hermos-cie-thread-configurator
+  hermos-components
+  hermos-e2e-test
+  hermos-ioctl-wrapper
+  hermoslib
+  hermos-sample-application
+  hermos-sample-interfaces
+  ros2hermos
 )
 for pkg_name in "${ros_pkg_names[@]}"; do
   apt_pkg="ros-${ROS_DISTRO}-${pkg_name}"
@@ -36,7 +36,7 @@ for pkg_name in "${ros_pkg_names[@]}"; do
 done
 
 if [ ${#conflicting_pkgs[@]} -gt 0 ]; then
-  echo "Error: The following apt-installed agnocast packages were found:"
+  echo "Error: The following apt-installed hermos packages were found:"
   for pkg in "${conflicting_pkgs[@]}"; do
     echo "  - $pkg"
   done

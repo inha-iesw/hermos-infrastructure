@@ -20,10 +20,10 @@ if ! command -v backportpackage &> /dev/null; then
 fi
 
 VERSION="2.3.5"
-RELEASE=$(dpkg-parsechangelog -l agnocast_kmod/debian/changelog -S Version | cut -d'-' -f2)
+RELEASE=$(dpkg-parsechangelog -l hermos_kmod/debian/changelog -S Version | cut -d'-' -f2)
 
-CHANGES_FILE="agnocast-kmod-v${VERSION}_${VERSION}-${RELEASE}_source.changes"
-DSC_FILE="agnocast-kmod-v${VERSION}_${VERSION}-${RELEASE}.dsc"
+CHANGES_FILE="hermos-kmod-v${VERSION}_${VERSION}-${RELEASE}_source.changes"
+DSC_FILE="hermos-kmod-v${VERSION}_${VERSION}-${RELEASE}.dsc"
 
 # Safety check: ensure dh-dkms is in the .dsc
 if ! grep -q "dh-dkms" "${DSC_FILE}"; then
@@ -32,7 +32,7 @@ if ! grep -q "dh-dkms" "${DSC_FILE}"; then
 fi
 
 # Upload to noble
-dput ppa:t4-system-software/agnocast ${CHANGES_FILE}
+dput ppa:t4-system-software/hermos ${CHANGES_FILE}
 
 # Backport to jammy
-backportpackage -u ppa:t4-system-software/agnocast -d jammy ${DSC_FILE} -y -sa
+backportpackage -u ppa:t4-system-software/hermos -d jammy ${DSC_FILE} -y -sa

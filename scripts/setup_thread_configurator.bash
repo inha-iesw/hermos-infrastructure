@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Set up the agnocast CIE thread configurator.
+# Set up the hermos CIE thread configurator.
 # Reference: https://autowarefoundation.github.io/agnocast_doc/callback-isolated-executor/integration-guide/#step-2-set-up-the-thread-configurator
 #
 # Usage:
@@ -10,7 +10,7 @@
 #
 # This script automates:
 #   1. Granting CAP_SYS_NICE to the thread_configurator_node binary.
-#   2. Registering required library paths in /etc/ld.so.conf.d/agnocast-cie.conf.
+#   2. Registering required library paths in /etc/ld.so.conf.d/hermos-cie.conf.
 
 set -euo pipefail
 
@@ -48,14 +48,14 @@ if ! command -v ldconfig >/dev/null 2>&1; then
 	exit 1
 fi
 
-if ! thread_configurator_prefix=$(ros2 pkg prefix agnocast_cie_thread_configurator 2>/dev/null); then
-	echo "Error: Package 'agnocast_cie_thread_configurator' not found."
+if ! thread_configurator_prefix=$(ros2 pkg prefix hermos_cie_thread_configurator 2>/dev/null); then
+	echo "Error: Package 'hermos_cie_thread_configurator' not found."
 	echo "       Build the workspace and source install/setup.bash first."
 	exit 1
 fi
 
-if ! config_msgs_prefix=$(ros2 pkg prefix agnocast_cie_config_msgs 2>/dev/null); then
-	echo "Error: Package 'agnocast_cie_config_msgs' not found."
+if ! config_msgs_prefix=$(ros2 pkg prefix hermos_cie_config_msgs 2>/dev/null); then
+	echo "Error: Package 'hermos_cie_config_msgs' not found."
 	echo "       Build the workspace and source install/setup.bash first."
 	exit 1
 fi
@@ -64,7 +64,7 @@ fi
 
 echo "[1/2] Grant CAP_SYS_NICE to thread_configurator_node"
 
-bin_path=$(readlink -f "${thread_configurator_prefix}/lib/agnocast_cie_thread_configurator/thread_configurator_node")
+bin_path=$(readlink -f "${thread_configurator_prefix}/lib/hermos_cie_thread_configurator/thread_configurator_node")
 
 if [ ! -f "$bin_path" ]; then
 	echo "  Error: binary not found at: $bin_path"
@@ -82,9 +82,9 @@ fi
 
 # --- Step 2: Configure library paths ---------------------------------------
 
-echo "[2/2] Configure library paths (/etc/ld.so.conf.d/agnocast-cie.conf)"
+echo "[2/2] Configure library paths (/etc/ld.so.conf.d/hermos-cie.conf)"
 
-conf_file=/etc/ld.so.conf.d/agnocast-cie.conf
+conf_file=/etc/ld.so.conf.d/hermos-cie.conf
 ros_lib_dir="/opt/ros/${ROS_DISTRO}/lib"
 ros_multiarch_lib_dir="/opt/ros/${ROS_DISTRO}/lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH)"
 config_msgs_lib_dir="${config_msgs_prefix}/lib"

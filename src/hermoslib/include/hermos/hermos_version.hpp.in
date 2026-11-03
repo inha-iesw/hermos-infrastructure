@@ -1,0 +1,9 @@
+#pragma once
+
+namespace ${PROJECT_NAME} {
+  constexpr const char* VERSION = "${PACKAGE_VERSION}";
+}
+
+extern "C" {
+  const char* hermos_get_version();
+}

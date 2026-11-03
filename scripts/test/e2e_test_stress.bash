@@ -1,8 +1,8 @@
 #!/bin/bash
 
-if ! grep -q "^agnocast " /proc/modules; then
-    echo "ERROR: agnocast kernel module is not loaded." >&2
-    echo "Load it first: sudo insmod agnocast_kmod/agnocast.ko" >&2
+if ! grep -q "^hermos " /proc/modules; then
+    echo "ERROR: hermos kernel module is not loaded." >&2
+    echo "Load it first: sudo insmod hermos_kmod/hermos.ko" >&2
     exit 1
 fi
 

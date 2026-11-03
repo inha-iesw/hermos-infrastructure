@@ -1,6 +1,6 @@
-## How to use ros2 command for Agnocast
+## How to use ros2 command for Hermos
 
-Currently, Agnocast supports the following `ros2` commands:
+Currently, Hermos supports the following `ros2` commands:
 
 - `ros2 topic list`
 - `ros2 topic info /topic_name`
@@ -9,89 +9,89 @@ Currently, Agnocast supports the following `ros2` commands:
 
 ### Topic List
 
-To list all topics including Agnocast, use `ros2 topic list_agnocast`.
+To list all topics including Hermos, use `ros2 topic list_hermos`.
 
-If a topic is Agnocast enabled, it will be shown with a "(Agnocast enabled)" suffix.
+If a topic is Hermos enabled, it will be shown with a "(Hermos enabled)" suffix.
 
 ```bash
-$ ros2 topic list_agnocast
+$ ros2 topic list_hermos
 /topic_name1
-/topic_name2 (Agnocast enabled)
+/topic_name2 (Hermos enabled)
 /topic_name3
 ```
 
-If you want to get only Agnocast related topics, use `ros2 topic list_agnocast | grep Agnocast`:
+If you want to get only Hermos related topics, use `ros2 topic list_hermos | grep Hermos`:
 
 ```bash
-$ ros2 topic list_agnocast | grep Agnocast
-/topic_name2 (Agnocast enabled)
+$ ros2 topic list_hermos | grep Hermos
+/topic_name2 (Hermos enabled)
 ```
 
-If an Agnocast topic is bridged to ROS 2 publishers or subscribers, it is shown with the "(Agnocast enabled, bridged)" suffix.
+If an Hermos topic is bridged to ROS 2 publishers or subscribers, it is shown with the "(Hermos enabled, bridged)" suffix.
 
 ```bash
-$ ros2 topic list_agnocast
-/topic_name1 (Agnocast enabled)
-/topic_name2 (Agnocast enabled, bridged)
+$ ros2 topic list_hermos
+/topic_name1 (Hermos enabled)
+/topic_name2 (Hermos enabled, bridged)
 /topic_name3
 ```
 
-This does not necessarily mean that a bridge process is currently running. If there is only one Agnocast publisher and no ROS 2 subscriber, the topic will be displayed simply as "(Agnocast enabled)" rather than including the "bridged" suffix. The "bridged" status indicates that communication has been successfully established between Agnocast and ROS 2.
+This does not necessarily mean that a bridge process is currently running. If there is only one Hermos publisher and no ROS 2 subscriber, the topic will be displayed simply as "(Hermos enabled)" rather than including the "bridged" suffix. The "bridged" status indicates that communication has been successfully established between Hermos and ROS 2.
 
 #### Table 1: Pub/Sub situations and display names
 
 | pub | sub | bridge | display |
 | :--- | :--- | :--- | :--- |
 | rclcpp::publisher | rclcpp::subscription | off / on | /my_topic |
-| agnocast::publisher | rclcpp::subscription | off | /my_topic (WARN: Agnocast and ROS 2 endpoints exist but bridge is not active) |
-| agnocast::publisher | rclcpp::subscription | on | /my_topic (Agnocast enabled, bridged) |
-| rclcpp::publisher | agnocast::subscription | off | /my_topic (WARN: Agnocast and ROS 2 endpoints exist but bridge is not active) |
-| rclcpp::publisher | agnocast::subscription | on | /my_topic (Agnocast enabled, bridged) |
-| agnocast::publisher | agnocast::subscription | off / on | /my_topic (Agnocast enabled) |
-| agnocast::publisher | non | off / on | /my_topic (Agnocast enabled) |
-| non | agnocast::subscription | off / on | /my_topic (Agnocast enabled) |
+| hermos::publisher | rclcpp::subscription | off | /my_topic (WARN: Hermos and ROS 2 endpoints exist but bridge is not active) |
+| hermos::publisher | rclcpp::subscription | on | /my_topic (Hermos enabled, bridged) |
+| rclcpp::publisher | hermos::subscription | off | /my_topic (WARN: Hermos and ROS 2 endpoints exist but bridge is not active) |
+| rclcpp::publisher | hermos::subscription | on | /my_topic (Hermos enabled, bridged) |
+| hermos::publisher | hermos::subscription | off / on | /my_topic (Hermos enabled) |
+| hermos::publisher | non | off / on | /my_topic (Hermos enabled) |
+| non | hermos::subscription | off / on | /my_topic (Hermos enabled) |
 
 #### Notes
 
-- If an Agnocast topic and a ROS 2 topic share the same name but have different message types, the status will still be displayed as (Agnocast enabled, bridged). However, in this case, the actual communication will not be established.
+- If an Hermos topic and a ROS 2 topic share the same name but have different message types, the status will still be displayed as (Hermos enabled, bridged). However, in this case, the actual communication will not be established.
 
 ### Topic Info
 
-To show the topic info including Agnocast, use `ros2 topic info_agnocast /topic_name`.
+To show the topic info including Hermos, use `ros2 topic info_hermos /topic_name`.
 
 ```bash
-$ ros2 topic info_agnocast /my_topic
-Type: agnocast_sample_interfaces/msg/DynamicSizeArray
+$ ros2 topic info_hermos /my_topic
+Type: hermos_sample_interfaces/msg/DynamicSizeArray
 ROS 2 Publisher count: 0
-Agnocast Publisher count: 1
+Hermos Publisher count: 1
 ROS 2 Subscription count: 0
-Agnocast Subscription count: 1
+Hermos Subscription count: 1
 ```
 
 For more details, use `--verbose` or `-v`.
 
 ```bash
-$ ros2 topic info_agnocast /my_topic -v
-Type: agnocast_sample_interfaces/msg/DynamicSizeArray
+$ ros2 topic info_hermos /my_topic -v
+Type: hermos_sample_interfaces/msg/DynamicSizeArray
 
 ROS 2 Publisher count: 0
-Agnocast Publisher count: 1
+Hermos Publisher count: 1
 
 Node name: talker_node
 Node namespace: /
-Topic type: agnocast_sample_interfaces/msg/DynamicSizeArray
-Endpoint type: PUBLISHER (Agnocast enabled)
+Topic type: hermos_sample_interfaces/msg/DynamicSizeArray
+Endpoint type: PUBLISHER (Hermos enabled)
 QoS profile:
   History (Depth): KEEP_LAST (1)
   Durability: VOLATILE
 
 ROS 2 Subscription count: 0
-Agnocast Subscription count: 1
+Hermos Subscription count: 1
 
 Node name: listener_node
 Node namespace: /
-Topic type: agnocast_sample_interfaces/msg/DynamicSizeArray
-Endpoint type: SUBSCRIPTION (Agnocast enabled)
+Topic type: hermos_sample_interfaces/msg/DynamicSizeArray
+Endpoint type: SUBSCRIPTION (Hermos enabled)
 QoS profile:
   History (Depth): KEEP_LAST (1)
   Durability: VOLATILE
@@ -99,29 +99,29 @@ QoS profile:
 
 #### Debug Mode
 
-By default, `ros2 topic info_agnocast` hides internal bridge nodes and endpoints to provide a cleaner view. To include these internal details, use the `--debug` or `-d` flag.
+By default, `ros2 topic info_hermos` hides internal bridge nodes and endpoints to provide a cleaner view. To include these internal details, use the `--debug` or `-d` flag.
 
 ```bash
-$ ros2 topic info_agnocast /my_topic -d
-Type: agnocast_sample_interfaces/msg/DynamicSizeArray
+$ ros2 topic info_hermos /my_topic -d
+Type: hermos_sample_interfaces/msg/DynamicSizeArray
 ROS 2 Publisher count: 1
-Agnocast Publisher count: 2
+Hermos Publisher count: 2
 ROS 2 Subscription count: 1
-Agnocast Subscription count: 2
+Hermos Subscription count: 2
 ```
 
 You can combine `-d` with `-v` for full verbose output including bridge node details:
 
 ```bash
-$ ros2 topic info_agnocast /my_topic -v -d
-Type: agnocast_sample_interfaces/msg/DynamicSizeArray
+$ ros2 topic info_hermos /my_topic -v -d
+Type: hermos_sample_interfaces/msg/DynamicSizeArray
 
 ROS 2 Publisher count: 1
-Agnocast Publisher count: 2
+Hermos Publisher count: 2
 
-Node name: agnocast_bridge_node_86050
+Node name: hermos_bridge_node_86050
 Node namespace: /
-Topic type: agnocast_sample_interfaces/msg/DynamicSizeArray
+Topic type: hermos_sample_interfaces/msg/DynamicSizeArray
 Endpoint type: PUBLISHER
 GID: 01.10.b2.d2.ef.55.13.0d.74.cc.0c.e6.00.00.16.03.00.00.00.00.00.00.00.00
 QoS profile:
@@ -133,28 +133,28 @@ QoS profile:
   Liveliness: AUTOMATIC
   Liveliness lease duration: Infinite
 
-Node name: agnocast_bridge_node_86050
+Node name: hermos_bridge_node_86050
 Node namespace: /
-Topic type: agnocast_sample_interfaces/msg/DynamicSizeArray
-Endpoint type: PUBLISHER (Agnocast enabled)
+Topic type: hermos_sample_interfaces/msg/DynamicSizeArray
+Endpoint type: PUBLISHER (Hermos enabled)
 QoS profile:
   History (Depth): KEEP_LAST (10)
   Durability: TRANSIENT_LOCAL
 
 Node name: talker_node
 Node namespace: /
-Topic type: agnocast_sample_interfaces/msg/DynamicSizeArray
-Endpoint type: PUBLISHER (Agnocast enabled)
+Topic type: hermos_sample_interfaces/msg/DynamicSizeArray
+Endpoint type: PUBLISHER (Hermos enabled)
 QoS profile:
   History (Depth): KEEP_LAST (1)
   Durability: VOLATILE
 
 ROS 2 Subscription count: 1
-Agnocast Subscription count: 2
+Hermos Subscription count: 2
 
-Node name: agnocast_bridge_node_86050
+Node name: hermos_bridge_node_86050
 Node namespace: /
-Topic type: agnocast_sample_interfaces/msg/DynamicSizeArray
+Topic type: hermos_sample_interfaces/msg/DynamicSizeArray
 Endpoint type: SUBSCRIPTION
 GID: 01.10.b2.d2.ef.55.13.0d.74.cc.0c.e6.00.00.15.04.00.00.00.00.00.00.00.00
 QoS profile:
@@ -168,16 +168,16 @@ QoS profile:
 
 Node name: listener_node
 Node namespace: /
-Topic type: agnocast_sample_interfaces/msg/DynamicSizeArray
-Endpoint type: SUBSCRIPTION (Agnocast enabled)
+Topic type: hermos_sample_interfaces/msg/DynamicSizeArray
+Endpoint type: SUBSCRIPTION (Hermos enabled)
 QoS profile:
   History (Depth): KEEP_LAST (1)
   Durability: VOLATILE
 
-Node name: agnocast_bridge_node_86050
+Node name: hermos_bridge_node_86050
 Node namespace: /
-Topic type: agnocast_sample_interfaces/msg/DynamicSizeArray
-Endpoint type: SUBSCRIPTION (Agnocast enabled)
+Topic type: hermos_sample_interfaces/msg/DynamicSizeArray
+Endpoint type: SUBSCRIPTION (Hermos enabled)
 QoS profile:
   History (Depth): KEEP_LAST (1)
   Durability: VOLATILE
@@ -185,42 +185,42 @@ QoS profile:
 
 ### Node List
 
-To list all nodes including those implemented with Agnocast, use `ros2 node list_agnocast`.
+To list all nodes including those implemented with Hermos, use `ros2 node list_hermos`.
 
-Standard ROS 2 nodes are displayed normally, while `agnocast::Node` instances are marked with the "(Agnocast enabled)" suffix.
+Standard ROS 2 nodes are displayed normally, while `hermos::Node` instances are marked with the "(Hermos enabled)" suffix.
 
 ```bash
-$ ros2 node list_agnocast
+$ ros2 node list_hermos
 /ros2_talker_node
-/agnocast_listener_node (Agnocast enabled)
+/hermos_listener_node (Hermos enabled)
 ```
 
 #### Debug Mode
 
-By default, `ros2 node list_agnocast` hides internal bridge nodes and endpoints to provide a cleaner view. To include these internal details, use the `--debug` or `-d` flag.
+By default, `ros2 node list_hermos` hides internal bridge nodes and endpoints to provide a cleaner view. To include these internal details, use the `--debug` or `-d` flag.
 
 ```bash
-$ ros2 node list_agnocast -d
+$ ros2 node list_hermos -d
 /ros2_talker_node
-/agnocast_bridge_node_86050
-/agnocast_listener_node (Agnocast enabled)
+/hermos_bridge_node_86050
+/hermos_listener_node (Hermos enabled)
 ```
 
 #### Notes
 
-Detection of agnocast::Node instances depends on the presence of Agnocast-enabled endpoints. A node without at least one Agnocast publisher or subscriber will be omitted from the output.
+Detection of hermos::Node instances depends on the presence of Hermos-enabled endpoints. A node without at least one Hermos publisher or subscriber will be omitted from the output.
 
 ### Node Info
 
-To show the node info including Agnocast, use `ros2 node info_agnocast /node_name`.
+To show the node info including Hermos, use `ros2 node info_hermos /node_name`.
 
 ```bash
-$ ros2 node info_agnocast /listener_node
+$ ros2 node info_hermos /listener_node
   Subscribers:
     /parameter_events: rcl_interfaces/msg/ParameterEvent
-    /my_topic: agnocast_sample_interfaces/msg/DynamicSizeArray (Agnocast enabled, bridged)
+    /my_topic: hermos_sample_interfaces/msg/DynamicSizeArray (Hermos enabled, bridged)
   Publishers:
-    /my_topic2: agnocast_sample_interfaces/msg/DynamicSizeArray (Agnocast enabled)
+    /my_topic2: hermos_sample_interfaces/msg/DynamicSizeArray (Hermos enabled)
     /parameter_events: rcl_interfaces/msg/ParameterEvent
     /rosout: rcl_interfaces/msg/Log
   Service Servers:
@@ -235,6 +235,6 @@ $ ros2 node info_agnocast /listener_node
   Action Clients:
 ```
 
-Similar to `ros2 topic list_agnocast`, the (Agnocast enabled, bridged) suffix in the node info indicates that communication has been successfully established between Agnocast and ROS 2 for that specific topic.
+Similar to `ros2 topic list_hermos`, the (Hermos enabled, bridged) suffix in the node info indicates that communication has been successfully established between Hermos and ROS 2 for that specific topic.
 
-If a topic is Agnocast-enabled but not currently bridged (e.g., there is no corresponding ROS 2 publisher/subscriber or the bridge process is not active), it will be displayed simply as (Agnocast enabled). This allows you to verify the connectivity status of each topic directly from the node's perspective.
+If a topic is Hermos-enabled but not currently bridged (e.g., there is no corresponding ROS 2 publisher/subscriber or the bridge process is not active), it will be displayed simply as (Hermos enabled). This allows you to verify the connectivity status of each topic directly from the node's perspective.

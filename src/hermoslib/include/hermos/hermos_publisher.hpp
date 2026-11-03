@@ -1,0 +1,379 @@
+#pragma once
+
+#include "hermos/hermos_ioctl.hpp"
+#include "hermos/hermos_mq.hpp"
+#include "hermos/hermos_public_api.hpp"
+#include "hermos/hermos_smart_pointer.hpp"
+#include "hermos/hermos_tracepoint_wrapper.h"
+#include "hermos/hermos_utils.hpp"
+#include "rclcpp/rclcpp.hpp"
+#include "rclcpp/serialized_message.hpp"
+#include "rosidl_typesupport_introspection_cpp/message_introspection.hpp"
+
+#include <mqueue.h>
+#include <sys/types.h>
+#include <unistd.h>
+
+#include <cstdint>
+#include <mutex>
+
+namespace hermos
+{
+class Node;
+
+const void * get_node_base_address(Node * node);
+
+// These are cut out of the class for information hiding.
+topic_local_id_t initialize_publisher(
+  const std::string & topic_name, const std::string & node_name, const rclcpp::QoS & qos,
+  const bool is_bridge, const std::string & type_name, std::string & out_mq_topic_name);
+union ioctl_publish_msg_args publish_core(
+  [[maybe_unused]] const void * publisher_handle, /* for CARET */ const std::string & topic_name,
+  const std::string & mq_topic_name, const topic_local_id_t publisher_id,
+  const uint64_t msg_virtual_address,
+  std::unordered_map<topic_local_id_t, std::tuple<mqd_t, bool>> & opened_mqs);
+uint32_t get_subscription_count_core(const std::string & topic_name);
+uint32_t get_intra_subscription_count_core(const std::string & topic_name);
+void increment_borrowed_publisher_num();
+void decrement_borrowed_publisher_num();
+
+extern int hermos_fd;
+extern "C" uint32_t hermos_get_borrowed_publisher_num();
+
+/**
+ * @brief Options for configuring an Hermos publisher.
+ */
+HERMOS_PUBLIC
+struct PublisherOptions
+{
+  /// @deprecated Use the `HERMOS_BRIDGE_MODE` environment variable instead.
+  bool do_always_ros2_publish = false;
+  /// QoS parameter override options (same semantics as rclcpp).
+  rclcpp::QosOverridingOptions qos_overriding_options{};
+};
+
+/**
+ * @brief Role of a publisher with respect to the Hermos<->ROS bridge.
+ *
+ * Encodes two properties of a publisher:
+ *   - whether it is used by the bridge implementation itself
+ *   - whether it should issue an A2R bridge request on construction
+ *
+ *   | Role            | kmod `is_bridge` | bridge request issued |
+ *   |-----------------|------------------|-----------------------|
+ *   | Default         | false            | yes (A2R)             |
+ *   | HermosOnly    | false            | no                    |
+ *   | BridgeInternal  | true             | no                    |
+ */
+enum class PublisherRole : uint8_t {
+  /// User-created publisher; issues an A2R bridge request.
+  Default,
+  /// Used internally; no bridge request is issued.
+  /// Not intended for direct use by application code.
+  HermosOnly,
+  /// Used by the bridge implementation itself; marked as bridge in kmod and
+  /// issues no bridge request.
+  /// Not intended for direct use by application code.
+  BridgeInternal,
+};
+
+// Base class for Hermos publishers. This class handles the common operations
+// shared with all Hermos publishers, such as kernel registration and message queue management.
+class PublisherBase
+{
+  void generate_gid();
+
+protected:
+  topic_local_id_t id_ = -1;
+  std::string topic_name_;
+  // Topic name for the publish-notification MQ (returned by the kmod). Differs from topic_name_
+  // only for a domain-bridged/renamed topic, where it is the pair's canonical name so a publisher
+  // and a renamed subscriber derive the same MQ name.
+  std::string mq_topic_name_;
+  std::unordered_map<topic_local_id_t, std::tuple<mqd_t, bool>> opened_mqs_;
+  std::mutex opened_mqs_mtx_;
+  rmw_gid_t gid_;
+
+  template <typename NodeT>
+  rclcpp::QoS init_base(
+    NodeT * node, const std::string & topic_name, const std::string & type_name,
+    const rclcpp::QoS & qos, const PublisherOptions & options, const PublisherRole role);
+
+public:
+  PublisherBase() = default;
+  virtual ~PublisherBase();
+
+  /**
+   * @brief Return the fully-resolved topic name.
+   * @return Null-terminated topic name string.
+   */
+  HERMOS_PUBLIC
+  const char * get_topic_name() const { return topic_name_.c_str(); }
+
+  /**
+   * @brief Return the GID of this publisher, unique across both Hermos and ROS 2.
+   * @return Publisher GID.
+   */
+  HERMOS_PUBLIC
+  const rmw_gid_t & get_gid() const { return gid_; }
+
+  /**
+   * @brief Return the total subscriber count for this topic (Hermos + ROS 2 via bridge).
+   * @return Total subscriber count.
+   */
+  HERMOS_PUBLIC
+  uint32_t get_subscription_count() const { return get_subscription_count_core(topic_name_); }
+
+  /**
+   * @brief Return the number of Hermos intra-process subscribers only (excludes ROS 2).
+   * @return Hermos subscriber count.
+   */
+  HERMOS_PUBLIC
+  uint32_t get_intra_subscription_count() const
+  {
+    return get_intra_subscription_count_core(topic_name_);
+  }
+};
+
+/**
+ * @brief Mirrors `rclcpp::Publisher` semantics: the topic type is supplied as a template
+ * type argument `MessageT`. It allocates a memory region for a message using
+ * borrow_loaned_message() and publishes it via zero-copy IPC using publish().
+ *
+ * @tparam MessageT ROS message type.
+ */
+HERMOS_PUBLIC
+template <typename MessageT>
+class Publisher : public PublisherBase
+{
+  template <typename NodeT>
+  rclcpp::QoS constructor_impl(
+    NodeT * node, const std::string & topic_name, const rclcpp::QoS & qos,
+    const PublisherOptions & options, const PublisherRole role)
+  {
+    // Gated to message types only — service types pulled in by
+    // BasicService<ServiceT> have no rosidl message name. The empty string
+    // signals "skip registry" to initialize_publisher.
+    std::string type_name;
+    if constexpr (rosidl_generator_traits::is_message<MessageT>::value) {
+      type_name = rosidl_generator_traits::name<MessageT>();
+    }
+
+    return this->init_base(node, topic_name, type_name, qos, options, role);
+  }
+
+public:
+  using SharedPtr = std::shared_ptr<Publisher<MessageT>>;
+
+  Publisher(
+    rclcpp::Node * node, const std::string & topic_name, const rclcpp::QoS & qos,
+    const PublisherOptions & options, const PublisherRole role = PublisherRole::Default)
+  {
+    const rclcpp::QoS actual_qos = constructor_impl(node, topic_name, qos, options, role);
+
+    TRACEPOINT(
+      hermos_publisher_init, static_cast<const void *>(this),
+      static_cast<const void *>(
+        node->get_node_base_interface()->get_shared_rcl_node_handle().get()),
+      topic_name_.c_str(), actual_qos.depth());
+  }
+
+  Publisher(
+    hermos::Node * node, const std::string & topic_name, const rclcpp::QoS & qos,
+    const PublisherOptions & options = PublisherOptions{},
+    const PublisherRole role = PublisherRole::Default)
+  {
+    const rclcpp::QoS actual_qos = constructor_impl(node, topic_name, qos, options, role);
+
+    TRACEPOINT(
+      hermos_publisher_init, static_cast<const void *>(this),
+      static_cast<const void *>(get_node_base_address(node)), topic_name_.c_str(),
+      actual_qos.depth());
+  }
+
+  /**
+   * @brief Allocate a new default-constructed message in shared memory. The caller must either
+   * pass the returned pointer to publish() or let it go out of scope (which frees the memory).
+   *
+   * @return Owned pointer to the newly allocated message in shared memory.
+   */
+  HERMOS_PUBLIC
+  ipc_shared_ptr<MessageT> borrow_loaned_message()
+  {
+    increment_borrowed_publisher_num();
+    MessageT * ptr = new MessageT();
+    return ipc_shared_ptr<MessageT>(ptr, topic_name_.c_str(), id_);
+  }
+
+  /**
+   * @brief Publish a message via zero-copy IPC. Ownership is transferred: after this call, the
+   * passed-in ipc_shared_ptr and all copies sharing its control block are invalidated —
+   * dereferencing them calls std::terminate().
+   *
+   * @param message Message obtained from borrow_loaned_message(). Must be moved in.
+   */
+  HERMOS_PUBLIC
+  void publish(ipc_shared_ptr<MessageT> && message)
+  {
+    if (!message || topic_name_ != message.get_topic_name()) {
+      RCLCPP_ERROR(logger, "Invalid message to publish.");
+      close(hermos_fd);
+      exit(EXIT_FAILURE);
+    }
+
+    // Capture raw pointer BEFORE invalidation (get() returns nullptr after invalidation).
+    const uint64_t msg_virtual_address = reinterpret_cast<uint64_t>(message.get());
+
+    // Invalidate all references sharing this handle's control block.
+    // Any remaining copies held elsewhere will fail-fast on dereference.
+    message.invalidate_all_references();
+
+    decrement_borrowed_publisher_num();
+
+    union ioctl_publish_msg_args publish_msg_args;
+    {
+      std::lock_guard<std::mutex> lock(opened_mqs_mtx_);
+      publish_msg_args =
+        publish_core(this, topic_name_, mq_topic_name_, id_, msg_virtual_address, opened_mqs_);
+    }
+
+    for (uint32_t i = 0; i < publish_msg_args.ret_released_num; i++) {
+      MessageT * release_ptr = reinterpret_cast<MessageT *>(publish_msg_args.ret_released_addrs[i]);
+      delete release_ptr;
+    }
+
+    message.reset();
+  }
+};
+
+/**
+ * @brief A type-erased Hermos publisher.
+ *
+ * There are four differences between this and Publisher:
+ *
+ * 1. borrow_loaned_message() takes a size and returns an ipc_shared_ptr<void> that points to a
+ *    shared memory block of the requested size.
+ * 2. publish() takes a deleter as well as the message. Because the message is type-erased, the
+ *    publisher cannot know how to free it, so the caller must provide a deleter.
+ * 3. If a user decides not to publish a borrowed message, they must call cancel_message() with a
+ *    deleter to free the memory.
+ * 4. The constructor is just a thin wrapper around init_base(). As this class is intended for
+ *    internal use only, flexibility is prioritized.
+ *
+ * NOTE: This is the publisher counterpart of Subscription<void>. This is not implemented as
+ * Publisher<void> because there is a clear semantic difference between a typed and type-erased
+ * publisher as described above.
+ */
+class TypeErasedPublisher : public PublisherBase
+{
+public:
+  using SharedPtr = std::shared_ptr<TypeErasedPublisher>;
+
+  TypeErasedPublisher(
+    rclcpp::Node * node, const std::string & topic_name, const std::string & topic_type,
+    const rclcpp::QoS & qos, const PublisherOptions & options, const PublisherRole role);
+
+  TypeErasedPublisher(
+    hermos::Node * node, const std::string & topic_name, const std::string & topic_type,
+    const rclcpp::QoS & qos, const PublisherOptions & options, const PublisherRole role);
+
+  ipc_shared_ptr<void> borrow_loaned_message(size_t size);
+
+  template <typename Deleter>
+  void cancel_message(ipc_shared_ptr<void> && message, Deleter && deleter)
+  {
+    if (!message || topic_name_ != message.get_topic_name()) {
+      RCLCPP_ERROR(logger, "Invalid message to cancel.");
+      close(hermos_fd);
+      exit(EXIT_FAILURE);
+    }
+
+    void * delete_ptr = message.get();
+
+    message.invalidate_all_references();
+
+    decrement_borrowed_publisher_num();
+
+    deleter(delete_ptr);
+
+    message.reset();
+  }
+
+  template <typename Deleter>
+  void publish(ipc_shared_ptr<void> && message, Deleter && deleter)
+  {
+    if (!message || topic_name_ != message.get_topic_name()) {
+      RCLCPP_ERROR(logger, "Invalid message to publish.");
+      close(hermos_fd);
+      exit(EXIT_FAILURE);
+    }
+
+    const uint64_t msg_virtual_address = reinterpret_cast<uint64_t>(message.get());
+
+    message.invalidate_all_references();
+
+    decrement_borrowed_publisher_num();
+
+    union ioctl_publish_msg_args publish_msg_args;
+    {
+      std::lock_guard<std::mutex> lock(opened_mqs_mtx_);
+      publish_msg_args =
+        publish_core(this, topic_name_, mq_topic_name_, id_, msg_virtual_address, opened_mqs_);
+    }
+
+    for (uint32_t i = 0; i < publish_msg_args.ret_released_num; i++) {
+      void * release_ptr = reinterpret_cast<void *>(publish_msg_args.ret_released_addrs[i]);
+      deleter(release_ptr);
+    }
+
+    message.reset();
+  }
+};
+
+/**
+ * @brief Mirrors `rclcpp::GenericPublisher` semantics: the topic type is supplied as a
+ * runtime string (e.g. "std_msgs/msg/String") rather than a compile-time
+ * template argument. The typesupport library is loaded eagerly in the
+ * constructor and held for the publisher's lifetime.
+ *
+ * Messages are passed to `publish()` as `rclcpp::SerializedMessage` objects
+ * and are deserialized into Hermos shared memory within the `publish()` call.
+ */
+HERMOS_PUBLIC
+class GenericPublisher : public TypeErasedPublisher
+{
+  // Keeps the dynamically loaded typesupport and introspection shared libraries
+  // (.so) alongside their handles for the lifetime of the publisher.
+  std::shared_ptr<rcpputils::SharedLibrary> ts_lib_;
+  const rosidl_message_type_support_t * type_support_handle_{nullptr};
+  std::shared_ptr<rcpputils::SharedLibrary> ts_lib_introspection_;
+  const rosidl_typesupport_introspection_cpp::MessageMembers * members_{nullptr};
+
+  void load_type_support(const std::string & topic_type);
+
+public:
+  using SharedPtr = std::shared_ptr<GenericPublisher>;
+
+  HERMOS_PUBLIC
+  GenericPublisher(
+    rclcpp::Node * node, const std::string & topic_name, const std::string & topic_type,
+    const rclcpp::QoS & qos, const PublisherOptions & options = PublisherOptions{},
+    PublisherRole role = PublisherRole::Default);
+
+  HERMOS_PUBLIC
+  GenericPublisher(
+    hermos::Node * node, const std::string & topic_name, const std::string & topic_type,
+    const rclcpp::QoS & qos, const PublisherOptions & options = PublisherOptions{},
+    PublisherRole role = PublisherRole::Default);
+
+  /**
+   * @brief Deserialize a serialized message into Hermos shared memory and
+   * publish it via zero-copy IPC.
+   *
+   * @param serialized_msg Serialized ROS 2 message to deserialize and publish.
+   */
+  HERMOS_PUBLIC
+  void publish(const rclcpp::SerializedMessage & serialized_msg);
+};
+
+}  // namespace hermos

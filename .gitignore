@@ -2,9 +2,9 @@ build/
 install/
 log/
 *.log
-coverage_report_agnocastlib
+coverage_report_hermoslib
 .vscode
-agnocast_kmod_coverage_report
+hermos_kmod_coverage_report
 *.pyc
 __pycache__
 *.deb

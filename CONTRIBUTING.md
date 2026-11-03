@@ -1,6 +1,6 @@
-# Contributing to Agnocast
+# Contributing to Hermos
 
-Thank you for your interest in contributing to Agnocast!
+Thank you for your interest in contributing to Hermos!
 
 ## Pull Request Requirements
 
@@ -9,7 +9,7 @@ Thank you for your interest in contributing to Agnocast!
 Every pull request **must** have exactly one of the following labels:
 
 - **`need-major-update`**: User API breaking changes - requires MAJOR version update
-- **`need-minor-update`**: Internal API breaking changes (kmod/agnocastlib compatibility) - requires MINOR version update
+- **`need-minor-update`**: Internal API breaking changes (kmod/hermoslib compatibility) - requires MINOR version update
 - **`need-patch-update`**: Bug fixes and other changes - requires PATCH version update
 
 **Important notes:**
@@ -21,7 +21,7 @@ Every pull request **must** have exactly one of the following labels:
 
 ## Versioning Rules
 
-Agnocast follows a modified semantic versioning scheme:
+Hermos follows a modified semantic versioning scheme:
 
 ### MAJOR version (`need-major-update`)
 
@@ -40,13 +40,13 @@ Increment when you make **breaking changes to internal APIs or component compati
 This includes changes that affect compatibility between:
 
 - kmod
-- agnocastlib
+- hermoslib
 
 Examples:
 
 - Removing or renaming ioctl commands
 - Modifying data structures used in ioctl interfaces
-- Changing shared data structures between kmod/agnocastlib
+- Changing shared data structures between kmod/hermoslib
 - Breaking changes to internal APIs not exposed to end users
 
 ### PATCH version (`need-patch-update`)

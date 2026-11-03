@@ -3,7 +3,7 @@ name: checkpatch
 on:
   pull_request:
     paths:
-      - 'agnocast_kmod/**'
+      - 'hermos_kmod/**'
 
 permissions:
   contents: read
@@ -45,9 +45,9 @@ jobs:
           # COMPLEX_MACRO: the KUnit suite's TEST_CASES_* macros are comma-separated
           # KUNIT_CASE(...) lists that cannot be parenthesized; this is a false positive.
           IGNORE="$IGNORE,COMPLEX_MACRO"
-          # FILE_PATH_CHANGES: agnocast is an out-of-tree module with no entry in the
+          # FILE_PATH_CHANGES: hermos is an out-of-tree module with no entry in the
           # kernel MAINTAINERS file, so adding or moving kmod files never needs one.
           IGNORE="$IGNORE,FILE_PATH_CHANGES"
 
-          git diff origin/${{ github.base_ref }}...HEAD -- agnocast_kmod/ \
+          git diff origin/${{ github.base_ref }}...HEAD -- hermos_kmod/ \
             | ./checkpatch.pl --no-tree --show-types --ignore="$IGNORE" -

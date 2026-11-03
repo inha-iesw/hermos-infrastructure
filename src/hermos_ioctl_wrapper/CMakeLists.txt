@@ -1,0 +1,13 @@
+cmake_minimum_required(VERSION 3.14)
+project(hermos_ioctl_wrapper)
+
+find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
+
+add_library(hermos_ioctl_wrapper SHARED src/topic_list.cpp src/node_info.cpp src/topic_info.cpp src/version.cpp src/domain_bridge.cpp src/discovery_agent.cpp)
+
+ament_target_dependencies(hermos_ioctl_wrapper rclcpp)
+
+install(TARGETS hermos_ioctl_wrapper LIBRARY DESTINATION lib)
+
+ament_package()

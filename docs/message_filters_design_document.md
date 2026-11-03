@@ -1,12 +1,12 @@
-# Agnocast Message Filters Design Document
+# Hermos Message Filters Design Document
 
 ## Overview
 
-Agnocast message filters provide a message synchronization framework adapted from the ROS 2 `message_filters` package (<https://github.com/ros2/message_filters>). The framework enables filtering, synchronizing, and routing messages delivered via agnocast's shared memory IPC, while maintaining API compatibility with the upstream ROS 2 implementation where possible.
+Hermos message filters provide a message synchronization framework adapted from the ROS 2 `message_filters` package (<https://github.com/ros2/message_filters>). The framework enables filtering, synchronizing, and routing messages delivered via hermos's shared memory IPC, while maintaining API compatibility with the upstream ROS 2 implementation where possible.
 
 ## Design Principles
 
-1. **Const-only message model**: Agnocast subscriptions receive `ipc_shared_ptr<const M>` exclusively, as messages reside in read-only shared memory. The entire message_filters stack is designed under this premise — non-const message access is neither supported nor expected.
+1. **Const-only message model**: Hermos subscriptions receive `ipc_shared_ptr<const M>` exclusively, as messages reside in read-only shared memory. The entire message_filters stack is designed under this premise — non-const message access is neither supported nor expected.
 
 2. **Alignment with ROS 2 implementation**: To maximize extensibility and readability, the implementation aligns with the ROS 2 `message_filters` API and architecture as closely as possible. This reduces the learning curve for developers familiar with ROS 2 and simplifies the addition of new sync policies (e.g., `ApproximateEpsilonTime`).
 
@@ -17,7 +17,7 @@ Agnocast message filters provide a message synchronization framework adapted fro
 ```text
 Publisher
   │
-  ▼ (agnocast shared memory IPC)
+  ▼ (hermos shared memory IPC)
 Subscriber<M> ──extends──▶ SimpleFilter<M>
   │                              │
   │ signalMessage(event)         │ Signal1<M>
@@ -46,7 +46,7 @@ Wraps an `ipc_shared_ptr<M const>` with receipt-time metadata.
 - Provides `getMessage()`, `getConstMessage()`, and `getReceiptTime()`.
 - Supports comparison operators for use in ordered containers.
 
-**Difference from ROS 2**: ROS 2 `MessageEvent` stores `std::shared_ptr` and supports both const and non-const messages. Agnocast's version only supports `ipc_shared_ptr<M const>`.
+**Difference from ROS 2**: ROS 2 `MessageEvent` stores `std::shared_ptr` and supports both const and non-const messages. Hermos's version only supports `ipc_shared_ptr<M const>`.
 
 ### ParameterAdapter (`parameter_adapter.hpp`)
 
@@ -60,7 +60,7 @@ Supported parameter types:
 | `ipc_shared_ptr<M const>` (by value) | `event.getMessage()` |
 | `const MessageEvent<M const>&` | `event` itself |
 
-**Difference from ROS 2**: ROS 2 additionally supports `std::shared_ptr<M>` (non-const), `const M&`, and `M` (by value). These are omitted because agnocast messages are always accessed via `ipc_shared_ptr<const M>`.
+**Difference from ROS 2**: ROS 2 additionally supports `std::shared_ptr<M>` (non-const), `const M&`, and `M` (by value). These are omitted because hermos messages are always accessed via `ipc_shared_ptr<const M>`.
 
 ### Signal1 (`signal1.hpp`)
 
@@ -84,13 +84,13 @@ Base class for single-output filters. Provides `registerCallback()` and `signalM
 
 ### Subscriber (`subscriber.hpp`)
 
-Connects agnocast subscriptions to the message_filters chain. Wraps `agnocast::create_subscription()` and signals received messages as `MessageEvent<M const>`.
+Connects hermos subscriptions to the message_filters chain. Wraps `hermos::create_subscription()` and signals received messages as `MessageEvent<M const>`.
 
 - Accepts both `std::shared_ptr<NodeType>` and raw `NodeType*`.
 - Supports subscribe/unsubscribe/resubscribe.
-- Supports `agnocast::SubscriptionOptions`.
+- Supports `hermos::SubscriptionOptions`.
 
-**Difference from ROS 2**: ROS 2 `Subscriber` uses `rclcpp::Subscription` internally. Agnocast's version uses `agnocast::create_subscription()` and converts the received `ipc_shared_ptr<M>` to `ipc_shared_ptr<M const>` before signaling.
+**Difference from ROS 2**: ROS 2 `Subscriber` uses `rclcpp::Subscription` internally. Hermos's version uses `hermos::create_subscription()` and converts the received `ipc_shared_ptr<M>` to `ipc_shared_ptr<M const>` before signaling.
 
 ### PassThrough (`pass_through.hpp`)
 
@@ -152,5 +152,5 @@ Groups messages whose timestamps are close but not necessarily identical. Uses a
 ## Future Work
 
 - **[ApproximateEpsilonTime policy](https://docs.ros.org/en/rolling/p/message_filters/doc/index.html#approximateepsilontime-policy)**: Support the `ApproximateEpsilonTime` sync policy.
-- **ROS message and agnocast message synchronization**: Enable synchronizing messages from both standard ROS 2 subscriptions (`std::shared_ptr<const M>`) and agnocast subscriptions (`ipc_shared_ptr<const M>`) within the same Synchronizer.
+- **ROS message and hermos message synchronization**: Enable synchronizing messages from both standard ROS 2 subscriptions (`std::shared_ptr<const M>`) and hermos subscriptions (`ipc_shared_ptr<const M>`) within the same Synchronizer.
 - **Additional filter types**: Support filters beyond `Synchronizer` and `PassThrough`, such as `Cache` (time-indexed message history) and `Chain` (sequential filter pipeline).

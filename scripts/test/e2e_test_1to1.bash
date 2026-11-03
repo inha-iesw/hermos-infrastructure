@@ -1,8 +1,8 @@
 #!/bin/bash
 
-if ! grep -q "^agnocast " /proc/modules; then
-    echo "ERROR: agnocast kernel module is not loaded." >&2
-    echo "Load it first: sudo insmod agnocast_kmod/agnocast.ko" >&2
+if ! grep -q "^hermos " /proc/modules; then
+    echo "ERROR: hermos kernel module is not loaded." >&2
+    echo "Load it first: sudo insmod hermos_kmod/hermos.ko" >&2
     exit 1
 fi
 
@@ -31,7 +31,7 @@ usage() {
     echo "  -s, --single       Run only one test case using current config file"
     echo "  -c, --continue     Continue running tests even if one fails"
     echo "  -p, --parallel N   Run tests in parallel with N workers (default: 1 = sequential)"
-    echo "                     NOTE: Requires AGNOCAST_BRIDGE_MODE=off (or 0)."
+    echo "                     NOTE: Requires HERMOS_BRIDGE_MODE=off (or 0)."
     exit 0
 }
 
@@ -71,7 +71,7 @@ if ! [[ "$PARALLEL" =~ ^[0-9]+$ ]] || [ "$PARALLEL" -lt 1 ]; then
 fi
 
 # Check bridge mode
-LOWER_BRIDGE_MODE=$(echo "$AGNOCAST_BRIDGE_MODE" | tr '[:upper:]' '[:lower:]')
+LOWER_BRIDGE_MODE=$(echo "$HERMOS_BRIDGE_MODE" | tr '[:upper:]' '[:lower:]')
 if [[ "$LOWER_BRIDGE_MODE" =~ ^(0|off)$ ]]; then
     BRIDGE_OFF=true
 else
@@ -79,8 +79,8 @@ else
 fi
 
 if [ "$PARALLEL" -gt 1 ] && [ "$BRIDGE_OFF" != true ]; then
-    echo "Error: -p/--parallel requires AGNOCAST_BRIDGE_MODE=off (or 0)." >&2
-    echo "       Either set AGNOCAST_BRIDGE_MODE=off, or run sequentially without -p." >&2
+    echo "Error: -p/--parallel requires HERMOS_BRIDGE_MODE=off (or 0)." >&2
+    echo "       Either set HERMOS_BRIDGE_MODE=off, or run sequentially without -p." >&2
     exit 1
 fi
 
@@ -88,20 +88,20 @@ fi
 TOPIC_PREFIX=${E2E_TOPIC_PREFIX:-/test_topic}
 
 # Setup
-rm -rf build/agnocast_e2e_test install/e2e_test
+rm -rf build/hermos_e2e_test install/e2e_test
 source /opt/ros/${ROS_DISTRO}/setup.bash
-colcon build --symlink-install --packages-select agnocast_e2e_test --cmake-args -DCMAKE_BUILD_TYPE=Release
+colcon build --symlink-install --packages-select hermos_e2e_test --cmake-args -DCMAKE_BUILD_TYPE=Release
 source install/setup.bash
 
 CURRENT_BRIDGE_DISPLAY=${LOWER_BRIDGE_MODE:-"on (default)"}
 echo "Bridge mode: $CURRENT_BRIDGE_DISPLAY" | sudo tee /dev/kmsg
 
 # Run test
-CONFIG_FILE="src/agnocast_e2e_test/test/config_test_1to1.yaml"
+CONFIG_FILE="src/hermos_e2e_test/test/config_test_1to1.yaml"
 show_config() {
     echo "----------------------------------------------" | sudo tee /dev/kmsg
     if [ "$BRIDGE_OFF" = true ]; then
-        grep -v "use_agnocast_pub" "$CONFIG_FILE" | sudo tee /dev/kmsg
+        grep -v "use_hermos_pub" "$CONFIG_FILE" | sudo tee /dev/kmsg
     else
         cat "$CONFIG_FILE" | sudo tee /dev/kmsg
     fi
@@ -111,7 +111,7 @@ show_config() {
 # Generate test ID from parameters (ROS2 topic-name safe: alphanumerics and underscores only)
 # Example: agnopub_pubfirst_pub_depth1_tl_sub_depth1_tl_takesub
 generate_test_id() {
-    local use_agnocast_pub=$1
+    local use_hermos_pub=$1
     local launch_pub_before_sub=$2
     local pub_qos_depth=$3
     local pub_transient_local=$4
@@ -120,7 +120,7 @@ generate_test_id() {
     local use_take_sub=$7
 
     local pub_type="agnopub"
-    [ "$use_agnocast_pub" = "false" ] && pub_type="ros2pub"
+    [ "$use_hermos_pub" = "false" ] && pub_type="ros2pub"
 
     local launch_order="pubfirst"
     [ "$launch_pub_before_sub" = "false" ] && launch_order="subfirst"
@@ -140,18 +140,18 @@ generate_test_id() {
 FAILURE_COUNT=0
 if [ "$RUN_SINGLE" = true ]; then
     show_config
-    launch_test src/agnocast_e2e_test/test/test_1to1.py
+    launch_test src/hermos_e2e_test/test/test_1to1.py
     if [ $? -ne 0 ]; then
         echo "Test failed" | sudo tee /dev/kmsg
         exit 1
     fi
 elif [ "$PARALLEL" -gt 1 ]; then
     # ===== Parallel execution mode =====
-    # When bridge is OFF, only test Agnocast publisher
+    # When bridge is OFF, only test Hermos publisher
     if [ "$BRIDGE_OFF" = true ]; then
-        USE_AGNOCAST_PUB=(true)
+        USE_HERMOS_PUB=(true)
     else
-        USE_AGNOCAST_PUB=(true false)
+        USE_HERMOS_PUB=(true false)
     fi
 
     LAUNCH_PUB_BEFORE_SUB=(true false)
@@ -161,7 +161,7 @@ elif [ "$PARALLEL" -gt 1 ]; then
     SUB_TRANSIENT_LOCAL=(true false)
     USE_TAKE_SUB=(true false)
 
-    TOTAL_TESTS=$((${#USE_AGNOCAST_PUB[@]} * ${#LAUNCH_PUB_BEFORE_SUB[@]} * ${#PUB_QOS_DEPTH[@]} * ${#PUB_TRANSIENT_LOCAL[@]} * ${#SUB_QOS_DEPTH[@]} * ${#SUB_TRANSIENT_LOCAL[@]} * ${#USE_TAKE_SUB[@]}))
+    TOTAL_TESTS=$((${#USE_HERMOS_PUB[@]} * ${#LAUNCH_PUB_BEFORE_SUB[@]} * ${#PUB_QOS_DEPTH[@]} * ${#PUB_TRANSIENT_LOCAL[@]} * ${#SUB_QOS_DEPTH[@]} * ${#SUB_TRANSIENT_LOCAL[@]} * ${#USE_TAKE_SUB[@]}))
 
     LOG_DIR="/tmp/e2e_1to1_logs"
     rm -rf "$LOG_DIR"
@@ -182,15 +182,15 @@ elif [ "$PARALLEL" -gt 1 ]; then
         echo "DDS domain IDs must be in 0-101. Reduce -p or lower ROS_DOMAIN_ID_BASE." | sudo tee /dev/kmsg
         exit 1
     fi
-    for use_agnocast_pub in ${USE_AGNOCAST_PUB[@]}; do
+    for use_hermos_pub in ${USE_HERMOS_PUB[@]}; do
         for launch_pub_before_sub in ${LAUNCH_PUB_BEFORE_SUB[@]}; do
             for pub_qos_depth in ${PUB_QOS_DEPTH[@]}; do
                 for pub_transient_local in ${PUB_TRANSIENT_LOCAL[@]}; do
                     for sub_qos_depth in ${SUB_QOS_DEPTH[@]}; do
                         for sub_transient_local in ${SUB_TRANSIENT_LOCAL[@]}; do
                             for use_take_sub in ${USE_TAKE_SUB[@]}; do
-                                TEST_ID=$(generate_test_id "$use_agnocast_pub" "$launch_pub_before_sub" "$pub_qos_depth" "$pub_transient_local" "$sub_qos_depth" "$sub_transient_local" "$use_take_sub")
-                                echo "$WORKER_NUM $TEST_ID $use_agnocast_pub $launch_pub_before_sub $pub_qos_depth $pub_transient_local $sub_qos_depth $sub_transient_local $use_take_sub" >> "$COMMANDS_FILE"
+                                TEST_ID=$(generate_test_id "$use_hermos_pub" "$launch_pub_before_sub" "$pub_qos_depth" "$pub_transient_local" "$sub_qos_depth" "$sub_transient_local" "$use_take_sub")
+                                echo "$WORKER_NUM $TEST_ID $use_hermos_pub $launch_pub_before_sub $pub_qos_depth $pub_transient_local $sub_qos_depth $sub_transient_local $use_take_sub" >> "$COMMANDS_FILE"
                                 WORKER_NUM=$((WORKER_NUM + 1))
                             done
                         done
@@ -222,7 +222,7 @@ elif [ "$PARALLEL" -gt 1 ]; then
 #!/bin/bash
 WORKER_NUM=$1
 TEST_ID=$2
-use_agnocast_pub=$3
+use_hermos_pub=$3
 launch_pub_before_sub=$4
 pub_qos_depth=$5
 pub_transient_local=$6
@@ -240,7 +240,7 @@ echo "[START  $COUNT/$TOTAL_TESTS] $TEST_ID (domain=$ROS_DOMAIN_ID)" | sudo tee 
 
 CONFIG_TMP="/tmp/e2e_1to1_${COUNT}_${TEST_ID}.yaml"
 cat > "$CONFIG_TMP" << CFG_EOF
-use_agnocast_pub: $use_agnocast_pub
+use_hermos_pub: $use_hermos_pub
 launch_pub_before_sub: $launch_pub_before_sub
 pub_qos_depth: $pub_qos_depth
 pub_transient_local: $pub_transient_local
@@ -250,7 +250,7 @@ use_take_sub: $use_take_sub
 CFG_EOF
 
 LOG_FILE="${LOG_DIR}/${COUNT}_${TEST_ID}.log"
-E2E_TOPIC_NAME="${TOPIC_PREFIX}_${TEST_ID}" E2E_CONFIG_PATH="$CONFIG_TMP" launch_test src/agnocast_e2e_test/test/test_1to1.py > "$LOG_FILE" 2>&1
+E2E_TOPIC_NAME="${TOPIC_PREFIX}_${TEST_ID}" E2E_CONFIG_PATH="$CONFIG_TMP" launch_test src/hermos_e2e_test/test/test_1to1.py > "$LOG_FILE" 2>&1
 EXIT_CODE=$?
 
 if [ $EXIT_CODE -ne 0 ]; then
@@ -303,11 +303,11 @@ WORKER_EOF
     fi
 else
     # ===== Sequential execution mode (original behavior) =====
-    # When bridge is OFF, only test Agnocast publisher
+    # When bridge is OFF, only test Hermos publisher
     if [ "$BRIDGE_OFF" = true ]; then
-        USE_AGNOCAST_PUB=(true)
+        USE_HERMOS_PUB=(true)
     else
-        USE_AGNOCAST_PUB=(true false)
+        USE_HERMOS_PUB=(true false)
     fi
 
     LAUNCH_PUB_BEFORE_SUB=(true false)
@@ -318,9 +318,9 @@ else
     USE_TAKE_SUB=(true false)
 
     COUNT=0
-    TOTAL_TESTS=$((${#USE_AGNOCAST_PUB[@]} * ${#LAUNCH_PUB_BEFORE_SUB[@]} * ${#PUB_QOS_DEPTH[@]} * ${#PUB_TRANSIENT_LOCAL[@]} * ${#SUB_QOS_DEPTH[@]} * ${#SUB_TRANSIENT_LOCAL[@]} * ${#USE_TAKE_SUB[@]}))
+    TOTAL_TESTS=$((${#USE_HERMOS_PUB[@]} * ${#LAUNCH_PUB_BEFORE_SUB[@]} * ${#PUB_QOS_DEPTH[@]} * ${#PUB_TRANSIENT_LOCAL[@]} * ${#SUB_QOS_DEPTH[@]} * ${#SUB_TRANSIENT_LOCAL[@]} * ${#USE_TAKE_SUB[@]}))
 
-    for use_agnocast_pub in ${USE_AGNOCAST_PUB[@]}; do
+    for use_hermos_pub in ${USE_HERMOS_PUB[@]}; do
         for launch_pub_before_sub in ${LAUNCH_PUB_BEFORE_SUB[@]}; do
             for pub_qos_depth in ${PUB_QOS_DEPTH[@]}; do
                 for pub_transient_local in ${PUB_TRANSIENT_LOCAL[@]}; do
@@ -328,7 +328,7 @@ else
                         for sub_transient_local in ${SUB_TRANSIENT_LOCAL[@]}; do
                             for use_take_sub in ${USE_TAKE_SUB[@]}; do
                                 COUNT=$((COUNT + 1))
-                                sed -i "s/use_agnocast_pub:.*/use_agnocast_pub: $use_agnocast_pub/g" $CONFIG_FILE
+                                sed -i "s/use_hermos_pub:.*/use_hermos_pub: $use_hermos_pub/g" $CONFIG_FILE
                                 sed -i "s/launch_pub_before_sub:.*/launch_pub_before_sub: $launch_pub_before_sub/g" $CONFIG_FILE
                                 sed -i "s/pub_qos_depth:.*/pub_qos_depth: $pub_qos_depth/g" $CONFIG_FILE
                                 sed -i "s/pub_transient_local:.*/pub_transient_local: $pub_transient_local/g" $CONFIG_FILE
@@ -337,7 +337,7 @@ else
                                 sed -i "s/use_take_sub:.*/use_take_sub: $use_take_sub/g" $CONFIG_FILE
                                 echo "====================== $COUNT / $TOTAL_TESTS ======================" | sudo tee /dev/kmsg
                                 show_config
-                                launch_test src/agnocast_e2e_test/test/test_1to1.py
+                                launch_test src/hermos_e2e_test/test/test_1to1.py
 
                                 if [ $? -ne 0 ]; then
                                     echo "Test failed." | sudo tee /dev/kmsg

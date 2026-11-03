@@ -1,6 +1,6 @@
 name: kunit
 
-# Runs the Agnocast kernel-module KUnit suite (agnocast_kmod/agnocast_kunit/).
+# Runs the Hermos kernel-module KUnit suite (hermos_kmod/hermos_kunit/).
 # kunit.py builds the suite into a throwaway kernel, boots it under QEMU, and
 # reports KTAP results -- no insmod, no root, no real hardware.
 #
@@ -19,13 +19,13 @@ name: kunit
 on:
   pull_request:
     paths:
-      - 'agnocast_kmod/**'
+      - 'hermos_kmod/**'
       - '.github/kunit/**'
       - '.github/workflows/kunit.yaml'
   push:
     branches: [main]
     paths:
-      - 'agnocast_kmod/**'
+      - 'hermos_kmod/**'
       - '.github/kunit/**'
       - '.github/workflows/kunit.yaml'
 
@@ -40,16 +40,16 @@ permissions:
 
 env:
   # Pinned LTS kernel for reproducible builds. Bump deliberately; the API guards
-  # in agnocast_kmod/Makefile already cover newer kernels.
+  # in hermos_kmod/Makefile already cover newer kernels.
   LINUX_REF: v6.12
   LINUX_REPO: https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
   # Suite-name glob passed to kunit.py. Trailing '*' is resilient to a suite
   # rename; the "no tests ran" guard below catches a zero-match (kunit.py itself
   # exits 0 when the filter matches nothing).
-  KUNIT_FILTER: 'agnocast*'
+  KUNIT_FILTER: 'hermos*'
 
 jobs:
-  agnocast-kunit:
+  hermos-kunit:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -81,13 +81,13 @@ jobs:
 
       # Cache kunit.py's build dir, kept outside the source tree so the cache
       # above doesn't absorb build artifacts. restore-keys reuses a previous
-      # build dir, so only the changed Agnocast objects recompile.
+      # build dir, so only the changed Hermos objects recompile.
       - name: Cache KUnit build dir
         id: kunit-build-cache
         uses: actions/cache@v4
         with:
           path: kunit-build
-          key: kunit-build-${{ runner.os }}-${{ env.LINUX_REF }}-${{ hashFiles('agnocast_kmod/**', '.github/kunit/**', '.github/workflows/kunit.yaml') }}
+          key: kunit-build-${{ runner.os }}-${{ env.LINUX_REF }}-${{ hashFiles('hermos_kmod/**', '.github/kunit/**', '.github/workflows/kunit.yaml') }}
           restore-keys: |
             kunit-build-${{ runner.os }}-${{ env.LINUX_REF }}-
 
@@ -98,27 +98,27 @@ jobs:
         if: steps.linux-src-cache.outputs.cache-hit != 'true'
         run: rm -rf kunit-build
 
-      # Stage the Agnocast sources into the kernel tree and hand kbuild our
-      # in-tree Makefile (.github/kunit/Kbuild). The layout mirrors agnocast_kmod/
-      # so the tests' "../agnocast.h" includes resolve.
-      - name: Stage Agnocast sources into Linux tree
+      # Stage the Hermos sources into the kernel tree and hand kbuild our
+      # in-tree Makefile (.github/kunit/Kbuild). The layout mirrors hermos_kmod/
+      # so the tests' "../hermos.h" includes resolve.
+      - name: Stage Hermos sources into Linux tree
         run: |
           set -euo pipefail
-          dst=linux/drivers/agnocast
+          dst=linux/drivers/hermos
           rm -rf "${dst}"
-          mkdir -p "${dst}/agnocast_kunit"
-          cp agnocast_kmod/*.c agnocast_kmod/*.h "${dst}/"
-          cp agnocast_kmod/agnocast_kunit/*.c \
-             agnocast_kmod/agnocast_kunit/*.h \
-             agnocast_kmod/agnocast_kunit/Makefile.inc \
-             "${dst}/agnocast_kunit/"
+          mkdir -p "${dst}/hermos_kunit"
+          cp hermos_kmod/*.c hermos_kmod/*.h "${dst}/"
+          cp hermos_kmod/hermos_kunit/*.c \
+             hermos_kmod/hermos_kunit/*.h \
+             hermos_kmod/hermos_kunit/Makefile.inc \
+             "${dst}/hermos_kunit/"
           cp .github/kunit/Kbuild "${dst}/Makefile"
-          if ! grep -q 'drivers/agnocast' linux/drivers/Makefile; then
-            echo 'obj-$(CONFIG_KUNIT) += agnocast/' >> linux/drivers/Makefile
+          if ! grep -q 'drivers/hermos' linux/drivers/Makefile; then
+            echo 'obj-$(CONFIG_KUNIT) += hermos/' >> linux/drivers/Makefile
           fi
 
       # Build the suite into a kernel, boot it under QEMU, run the tests.
-      - name: Run Agnocast KUnit suite under QEMU
+      - name: Run Hermos KUnit suite under QEMU
         working-directory: linux
         run: |
           set -euo pipefail

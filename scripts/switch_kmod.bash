@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Switch the installed agnocast-kmod to a specified version.
+# Switch the installed hermos-kmod to a specified version.
 #
 # Usage:
 #   ./scripts/switch_kmod.bash <version>
@@ -14,10 +14,10 @@
 # the same ioctl ABI version.
 #
 # This script:
-#   1. Unloads the currently loaded agnocast kernel module.
-#   2. Purges every installed agnocast-kmod-v* package.
-#   3. Removes leftover DKMS entries for agnocast.
-#   4. Installs agnocast-kmod-v<version> from apt.
+#   1. Unloads the currently loaded hermos kernel module.
+#   2. Purges every installed hermos-kmod-v* package.
+#   3. Removes leftover DKMS entries for hermos.
+#   4. Installs hermos-kmod-v<version> from apt.
 #   5. Loads the new module and prints the version info from dmesg.
 
 set -euo pipefail
@@ -36,7 +36,7 @@ if ! [[ "${target_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 	exit 1
 fi
 
-target_package="agnocast-kmod-v${target_version}"
+target_package="hermos-kmod-v${target_version}"
 
 # --- Prerequisites ---------------------------------------------------------
 
@@ -52,9 +52,9 @@ echo "Target: ${target_package}"
 # Early-exit if the target package is already installed and the module is
 # currently loaded — in that case there is nothing to switch.
 if dpkg-query -W -f='${Status}' "${target_package}" 2>/dev/null | grep -q "install ok installed" \
-	&& lsmod | awk '{print $1}' | grep -qx agnocast; then
-	loaded_ver=$(sudo dmesg | grep -E "Agnocast installed! v" | tail -n 1 \
-		| sed -n 's/.*Agnocast installed! v\([^[:space:]]*\).*/\1/p' || true)
+	&& lsmod | awk '{print $1}' | grep -qx hermos; then
+	loaded_ver=$(sudo dmesg | grep -E "Hermos installed! v" | tail -n 1 \
+		| sed -n 's/.*Hermos installed! v\([^[:space:]]*\).*/\1/p' || true)
 	if [ "${loaded_ver}" = "${target_version}" ]; then
 		echo "${target_package} is already installed and loaded. Nothing to do."
 		exit 0
@@ -62,7 +62,7 @@ if dpkg-query -W -f='${Status}' "${target_package}" 2>/dev/null | grep -q "insta
 fi
 
 echo ""
-echo "WARNING: Make sure every container using agnocast is stopped before continuing."
+echo "WARNING: Make sure every container using hermos is stopped before continuing."
 echo "         The heaphook inside your container must match version v${target_version}."
 read -rp "Proceed? [y/N] " answer
 if ! [[ ${answer:0:1} =~ y|Y ]]; then
@@ -90,18 +90,18 @@ echo "  OK."
 
 # --- Step 1: Unload current module -----------------------------------------
 
-echo "[1/5] Unload agnocast kernel module"
+echo "[1/5] Unload hermos kernel module"
 
-if lsmod | awk '{print $1}' | grep -qx agnocast; then
-	if ! sudo modprobe -r agnocast; then
-		echo "  Error: failed to unload agnocast. A process may still be holding /dev/agnocast."
-		if command -v fuser >/dev/null 2>&1 && [ -e /dev/agnocast ]; then
-			echo "  Processes currently using /dev/agnocast:"
-			sudo fuser -v /dev/agnocast || echo "  (fuser reported no users; module refcount may be held by another path)"
+if lsmod | awk '{print $1}' | grep -qx hermos; then
+	if ! sudo modprobe -r hermos; then
+		echo "  Error: failed to unload hermos. A process may still be holding /dev/hermos."
+		if command -v fuser >/dev/null 2>&1 && [ -e /dev/hermos ]; then
+			echo "  Processes currently using /dev/hermos:"
+			sudo fuser -v /dev/hermos || echo "  (fuser reported no users; module refcount may be held by another path)"
 		else
-			echo "  (fuser not available; install 'psmisc' to see which PIDs hold /dev/agnocast)"
+			echo "  (fuser not available; install 'psmisc' to see which PIDs hold /dev/hermos)"
 		fi
-		echo "         Stop all agnocast users (containers, ROS nodes) and retry."
+		echo "         Stop all hermos users (containers, ROS nodes) and retry."
 		exit 1
 	fi
 	echo "  Unloaded."
@@ -109,11 +109,11 @@ else
 	echo "  Not loaded. Skipping."
 fi
 
-# --- Step 2: Purge existing agnocast-kmod-v* packages ----------------------
+# --- Step 2: Purge existing hermos-kmod-v* packages ----------------------
 
-echo "[2/5] Purge existing agnocast-kmod-v* packages"
+echo "[2/5] Purge existing hermos-kmod-v* packages"
 
-installed_pkgs=$(dpkg-query -W -f='${Package} ${Status}\n' 'agnocast-kmod-v*' 2>/dev/null \
+installed_pkgs=$(dpkg-query -W -f='${Package} ${Status}\n' 'hermos-kmod-v*' 2>/dev/null \
 	| awk '$NF == "installed" {print $1}' || true)
 
 if [ -n "$installed_pkgs" ]; then
@@ -131,34 +131,34 @@ echo "[3/5] Remove leftover DKMS entries and orphan modules"
 # DKMS may have been left with broken entries (missing source dir) by old
 # packages, in which case `dkms remove` fails. Fall back to deleting the
 # state directory directly.
-if [ -d /var/lib/dkms/agnocast ]; then
-	for ver_dir in /var/lib/dkms/agnocast/*/; do
+if [ -d /var/lib/dkms/hermos ]; then
+	for ver_dir in /var/lib/dkms/hermos/*/; do
 		[ -d "$ver_dir" ] || continue
 		ver=$(basename "$ver_dir")
 		# Skip per-kernel build directories (e.g. kernel-6.8.0-XX-generic-x86_64);
-		# `dkms remove agnocast/<ver> --all` cleans those up as a side effect.
+		# `dkms remove hermos/<ver> --all` cleans those up as a side effect.
 		[[ "$ver" == kernel-* ]] && continue
-		echo "  Removing agnocast/${ver}"
-		if ! sudo dkms remove "agnocast/${ver}" --all 2>/dev/null; then
+		echo "  Removing hermos/${ver}"
+		if ! sudo dkms remove "hermos/${ver}" --all 2>/dev/null; then
 			sudo rm -rf "$ver_dir"
 		fi
 	done
 	# Remove any kernel-* build dirs still left over (e.g. if `dkms remove`
 	# failed above and we fell back to rm -rf of the version dir only).
-	sudo rm -rf /var/lib/dkms/agnocast/kernel-*
-	sudo rmdir /var/lib/dkms/agnocast 2>/dev/null || true
+	sudo rm -rf /var/lib/dkms/hermos/kernel-*
+	sudo rmdir /var/lib/dkms/hermos 2>/dev/null || true
 else
 	echo "  No DKMS entries."
 fi
 
-# Old unversioned installs may leave /lib/modules/<kver>/updates/dkms/agnocast.ko*
+# Old unversioned installs may leave /lib/modules/<kver>/updates/dkms/hermos.ko*
 # behind, which blocks the new DKMS install with "already installed
 # (unversioned module)".
 kver=$(uname -r)
 orphan_dir="/lib/modules/${kver}/updates/dkms"
-if sudo test -e "${orphan_dir}/agnocast.ko" || sudo test -e "${orphan_dir}/agnocast.ko.zst"; then
+if sudo test -e "${orphan_dir}/hermos.ko" || sudo test -e "${orphan_dir}/hermos.ko.zst"; then
 	echo "  Removing orphan unversioned module in ${orphan_dir}"
-	sudo rm -f "${orphan_dir}/agnocast.ko" "${orphan_dir}/agnocast.ko.zst"
+	sudo rm -f "${orphan_dir}/hermos.ko" "${orphan_dir}/hermos.ko.zst"
 	sudo depmod -a
 fi
 
@@ -170,24 +170,24 @@ sudo apt-get install -y "${target_package}"
 
 # --- Step 5: Load and verify -----------------------------------------------
 
-echo "[5/5] Load agnocast and verify"
+echo "[5/5] Load hermos and verify"
 
-sudo modprobe agnocast
+sudo modprobe hermos
 echo "  Loaded."
 
-# Steps 1–4 unloaded the old module, purged every agnocast-kmod-v* package,
-# and installed exactly one target package, so the last 'Agnocast installed!'
+# Steps 1–4 unloaded the old module, purged every hermos-kmod-v* package,
+# and installed exactly one target package, so the last 'Hermos installed!'
 # line in dmesg corresponds to the modprobe we just ran.
-install_line=$(sudo dmesg | grep -E "Agnocast installed! v" | tail -n 1 || true)
+install_line=$(sudo dmesg | grep -E "Hermos installed! v" | tail -n 1 || true)
 
 if [ -z "$install_line" ]; then
-	echo "  Error: no 'Agnocast installed! v...' line found in dmesg."
-	echo "  Recent agnocast-related kernel messages:"
-	sudo dmesg | grep -i agnocast | tail -n 20 || true
+	echo "  Error: no 'Hermos installed! v...' line found in dmesg."
+	echo "  Recent hermos-related kernel messages:"
+	sudo dmesg | grep -i hermos | tail -n 20 || true
 	exit 1
 fi
 
-loaded_version=$(echo "$install_line" | sed -n 's/.*Agnocast installed! v\([^[:space:]]*\).*/\1/p')
+loaded_version=$(echo "$install_line" | sed -n 's/.*Hermos installed! v\([^[:space:]]*\).*/\1/p')
 echo "  ${install_line}"
 
 if [ "$loaded_version" != "$target_version" ]; then
@@ -199,14 +199,14 @@ echo ""
 echo "Done. Installed and loaded: ${target_package} (v${loaded_version})"
 echo ""
 echo "=========================================================================="
-echo "  NEXT STEP — verify kmod / heaphook / agnocastlib versions"
+echo "  NEXT STEP — verify kmod / heaphook / hermoslib versions"
 echo "=========================================================================="
 echo ""
-echo "  In the environment where your ROS 2 / Agnocast app will actually run"
+echo "  In the environment where your ROS 2 / Hermos app will actually run"
 echo "  (inside the container for container-based setups, or on this host"
 echo "  for direct setups), run:"
 echo ""
-echo "      source <your-workspace>/install/setup.bash   # must include ros2agnocast"
-echo "      ros2 agnocast -v"
+echo "      source <your-workspace>/install/setup.bash   # must include ros2hermos"
+echo "      ros2 hermos -v"
 echo ""
 echo "=========================================================================="

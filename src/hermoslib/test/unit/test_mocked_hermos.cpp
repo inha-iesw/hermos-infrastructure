@@ -1,0 +1,781 @@
+#include "hermos/hermos.hpp"
+#include "hermos/hermos_callback_info.hpp"
+#include "hermos/hermos_epoll.hpp"
+#include "hermos/hermos_publisher.hpp"
+#include "hermos/hermos_smart_pointer.hpp"
+#include "rclcpp/rclcpp.hpp"
+
+#include "std_msgs/msg/int32.hpp"
+
+#include <gtest/gtest.h>
+
+using namespace hermos;
+
+int release_subscriber_reference_mock_called_count = 0;
+int publish_core_mock_called_count = 0;
+uint32_t mock_borrowed_publisher_num = 0;
+
+extern "C" uint32_t hermos_get_borrowed_publisher_num()
+{
+  return mock_borrowed_publisher_num;
+}
+
+namespace hermos
+{
+void release_subscriber_reference(const std::string &, const topic_local_id_t, const int64_t)
+{
+  release_subscriber_reference_mock_called_count++;
+}
+
+void decrement_borrowed_publisher_num()
+{
+  if (mock_borrowed_publisher_num > 0) {
+    mock_borrowed_publisher_num--;
+  }
+}
+
+void increment_borrowed_publisher_num()
+{
+  mock_borrowed_publisher_num++;
+}
+
+topic_local_id_t initialize_publisher(
+  const std::string & topic_name, const std::string &, const rclcpp::QoS &, const bool,
+  const std::string &, std::string & out_mq_topic_name)
+{
+  out_mq_topic_name = topic_name;  // non-bridged: the notification MQ uses the topic's own name
+  return 0;                        // Dummy value
+}
+union ioctl_publish_msg_args publish_core(
+  const void *, const std::string &, const std::string &, const topic_local_id_t, const uint64_t,
+  std::unordered_map<topic_local_id_t, std::tuple<mqd_t, bool>> &)
+{
+  publish_core_mock_called_count++;
+  return ioctl_publish_msg_args{};  // Dummy value
+}
+
+BridgeMode get_bridge_mode()
+{
+  return BridgeMode::Off;  // Skip MQ sending in tests
+}
+
+PublisherBase::~PublisherBase() = default;
+}  // namespace hermos
+
+// =========================================
+// Publisher tests
+// =========================================
+
+class HermosPublisherTest : public ::testing::Test
+{
+protected:
+  void SetUp() override
+  {
+    rclcpp::init(0, nullptr);
+    dummy_tn = "/dummy";
+    pid = getpid();
+    node = std::make_shared<rclcpp::Node>("dummy_node");
+    dummy_publisher =
+      hermos::create_publisher<std_msgs::msg::Int32>(node.get(), dummy_tn, dummy_qos);
+
+    publish_core_mock_called_count = 0;
+    mock_borrowed_publisher_num = 0;
+  }
+
+  void TearDown() override { rclcpp::shutdown(); }
+
+  std::shared_ptr<rclcpp::Node> node;
+  hermos::Publisher<std_msgs::msg::Int32>::SharedPtr dummy_publisher;
+  std::string dummy_tn;
+  pid_t pid;
+  rclcpp::QoS dummy_qos{10};
+};
+
+TEST_F(HermosPublisherTest, test_publish_normal)
+{
+  // Arrange
+  hermos::ipc_shared_ptr<std_msgs::msg::Int32> message = dummy_publisher->borrow_loaned_message();
+
+  // Act
+  dummy_publisher->publish(std::move(message));
+
+  // Assert
+  EXPECT_EQ(publish_core_mock_called_count, 1);
+  EXPECT_EQ(hermos_get_borrowed_publisher_num(), 0);
+}
+
+TEST_F(HermosPublisherTest, test_publish_null_message)
+{
+  // Arrange
+  hermos::ipc_shared_ptr<std_msgs::msg::Int32> message;
+
+  // Act & Assert
+  EXPECT_EXIT(
+    dummy_publisher->publish(std::move(message)), ::testing::ExitedWithCode(EXIT_FAILURE),
+    "Invalid message to publish.");
+}
+
+TEST_F(HermosPublisherTest, test_publish_already_published_message)
+{
+  // Arrange
+  hermos::ipc_shared_ptr<std_msgs::msg::Int32> message = dummy_publisher->borrow_loaned_message();
+  dummy_publisher->publish(std::move(message));
+
+  // Act & Assert
+  EXPECT_EXIT(
+    dummy_publisher->publish(std::move(message)), ::testing::ExitedWithCode(EXIT_FAILURE),
+    "Invalid message to publish.");
+}
+
+TEST_F(HermosPublisherTest, test_publish_different_message)
+{
+  // Arrange
+  std::string diff_dummy_tn = "/dummy2";
+  hermos::Publisher<std_msgs::msg::Int32>::SharedPtr diff_publisher =
+    hermos::create_publisher<std_msgs::msg::Int32>(node.get(), diff_dummy_tn, dummy_qos);
+  hermos::ipc_shared_ptr<std_msgs::msg::Int32> diff_message =
+    diff_publisher->borrow_loaned_message();
+  hermos::ipc_shared_ptr<std_msgs::msg::Int32> message = dummy_publisher->borrow_loaned_message();
+
+  // Act & Assert
+  EXPECT_EXIT(
+    dummy_publisher->publish(std::move(diff_message)), ::testing::ExitedWithCode(EXIT_FAILURE),
+    "Invalid message to publish.");
+}
+
+TEST_F(HermosPublisherTest, test_publish_loan_num_and_pub_num_mismatch)
+{
+  // Arrange
+  hermos::ipc_shared_ptr<std_msgs::msg::Int32> message = dummy_publisher->borrow_loaned_message();
+  message.reset();  // This simulates the early return.
+  hermos::ipc_shared_ptr<std_msgs::msg::Int32> next_message =
+    dummy_publisher->borrow_loaned_message();
+
+  // Act
+  dummy_publisher->publish(std::move(next_message));
+
+  // Assert
+  EXPECT_EQ(hermos_get_borrowed_publisher_num(), 0);
+}
+
+TEST_F(HermosPublisherTest, test_multiple_borrows_in_single_callback)
+{
+  // Scenario: two borrows, then two publishes — counter tracks correctly.
+  EXPECT_EQ(hermos_get_borrowed_publisher_num(), 0);
+
+  hermos::ipc_shared_ptr<std_msgs::msg::Int32> msg1 = dummy_publisher->borrow_loaned_message();
+  EXPECT_EQ(hermos_get_borrowed_publisher_num(), 1);
+
+  hermos::ipc_shared_ptr<std_msgs::msg::Int32> msg2 = dummy_publisher->borrow_loaned_message();
+  EXPECT_EQ(hermos_get_borrowed_publisher_num(), 2);
+
+  dummy_publisher->publish(std::move(msg1));
+  EXPECT_EQ(hermos_get_borrowed_publisher_num(), 1);
+
+  dummy_publisher->publish(std::move(msg2));
+  EXPECT_EQ(hermos_get_borrowed_publisher_num(), 0);
+  EXPECT_EQ(publish_core_mock_called_count, 2);
+}
+
+TEST_F(HermosPublisherTest, test_borrow_dropped_without_publish)
+{
+  // Scenario: borrow a message but let it go out of scope without publishing.
+  EXPECT_EQ(hermos_get_borrowed_publisher_num(), 0);
+
+  {
+    hermos::ipc_shared_ptr<std_msgs::msg::Int32> msg = dummy_publisher->borrow_loaned_message();
+    EXPECT_EQ(hermos_get_borrowed_publisher_num(), 1);
+  }  // msg destroyed here — decrement via ipc_shared_ptr destructor.
+
+  EXPECT_EQ(hermos_get_borrowed_publisher_num(), 0);
+  EXPECT_EQ(publish_core_mock_called_count, 0);
+}
+
+TEST_F(HermosPublisherTest, test_multiple_borrows_mixed_publish_and_drop)
+{
+  // Scenario: three borrows — publish first, drop second via scope, publish third.
+  EXPECT_EQ(hermos_get_borrowed_publisher_num(), 0);
+
+  hermos::ipc_shared_ptr<std_msgs::msg::Int32> msg1 = dummy_publisher->borrow_loaned_message();
+  hermos::ipc_shared_ptr<std_msgs::msg::Int32> msg3 = dummy_publisher->borrow_loaned_message();
+  {
+    hermos::ipc_shared_ptr<std_msgs::msg::Int32> msg2 = dummy_publisher->borrow_loaned_message();
+    EXPECT_EQ(hermos_get_borrowed_publisher_num(), 3);
+  }  // msg2 dropped without publish.
+  EXPECT_EQ(hermos_get_borrowed_publisher_num(), 2);
+
+  dummy_publisher->publish(std::move(msg1));
+  EXPECT_EQ(hermos_get_borrowed_publisher_num(), 1);
+
+  dummy_publisher->publish(std::move(msg3));
+  EXPECT_EQ(hermos_get_borrowed_publisher_num(), 0);
+  EXPECT_EQ(publish_core_mock_called_count, 2);
+}
+
+// =========================================
+// TypeErasedPublisher tests
+// =========================================
+
+class HermosTypeErasedPublisherTest : public ::testing::Test
+{
+protected:
+  void SetUp() override
+  {
+    rclcpp::init(0, nullptr);
+    node = std::make_shared<rclcpp::Node>("dummy_node");
+    dummy_publisher = std::make_shared<hermos::TypeErasedPublisher>(
+      node.get(), "/dummy", "/std_msgs/msg/Int32", rclcpp::QoS{10}, hermos::PublisherOptions{},
+      hermos::PublisherRole::Default);
+
+    publish_core_mock_called_count = 0;
+    mock_borrowed_publisher_num = 0;
+  }
+
+  void TearDown() override { rclcpp::shutdown(); }
+
+  std::shared_ptr<rclcpp::Node> node;
+  std::shared_ptr<hermos::TypeErasedPublisher> dummy_publisher;
+};
+
+TEST_F(HermosTypeErasedPublisherTest, test_cancel)
+{
+  // Arrange
+  hermos::ipc_shared_ptr<void> message = dummy_publisher->borrow_loaned_message(4);
+  void * message_ptr = message.get();
+  void * delete_ptr = nullptr;
+  auto deleter = [&delete_ptr](void * p) {
+    delete_ptr = p;
+    ::operator delete(p);
+  };
+
+  // Act
+  dummy_publisher->cancel_message(std::move(message), deleter);
+
+  // Assert
+  EXPECT_EQ(publish_core_mock_called_count, 0);
+  EXPECT_EQ(hermos_get_borrowed_publisher_num(), 0);
+  EXPECT_NE(message_ptr, nullptr);
+  EXPECT_EQ(delete_ptr, message_ptr);
+}
+
+// =========================================
+// ipc_shared_ptr tests
+// =========================================
+
+class HermosSmartPointerTest : public ::testing::Test
+{
+protected:
+  void SetUp() override
+  {
+    dummy_tn = "dummy";
+    dummy_pubsub_id = 1;
+    dummy_entry_id = 2;
+
+    release_subscriber_reference_mock_called_count = 0;
+  }
+
+  std::string dummy_tn;
+  topic_local_id_t dummy_pubsub_id;
+  int64_t dummy_entry_id;
+};
+
+TEST_F(HermosSmartPointerTest, reset_normal)
+{
+  // Arrange
+  hermos::ipc_shared_ptr<int> sut{new int(0), dummy_tn, dummy_pubsub_id, dummy_entry_id};
+
+  // Act
+  sut.reset();
+
+  // Assert
+  // Last reference destroyed, so release_subscriber_reference is called once.
+  EXPECT_EQ(release_subscriber_reference_mock_called_count, 1);
+  EXPECT_EQ(nullptr, sut.get());
+}
+
+TEST_F(HermosSmartPointerTest, reset_nullptr)
+{
+  // Arrange
+  std::shared_ptr<hermos::ipc_shared_ptr<int>> sut;
+
+  // Act
+  sut.reset();
+
+  // Assert
+  EXPECT_EQ(release_subscriber_reference_mock_called_count, 0);
+}
+
+void drop_unpublished_void_message(const std::string & tn, topic_local_id_t pubsub_id)
+{
+  void * ptr = ::operator new(4);
+  hermos::ipc_shared_ptr<void> sut{ptr, tn, pubsub_id, ENTRY_ID_NOT_ASSIGNED};
+  return;
+}
+
+TEST_F(HermosSmartPointerTest, reset_void)
+{
+  EXPECT_DEATH(drop_unpublished_void_message(dummy_tn, dummy_pubsub_id), "");
+}
+
+TEST_F(HermosSmartPointerTest, copy_constructor_normal)
+{
+  // Arrange
+  hermos::ipc_shared_ptr<int> sut{new int(0), dummy_tn, dummy_pubsub_id, dummy_entry_id};
+
+  // Act
+  hermos::ipc_shared_ptr<int> sut2 = sut;
+
+  // Assert
+  // Copy does not trigger any ioctl - reference counting is done in userspace.
+  EXPECT_EQ(release_subscriber_reference_mock_called_count, 0);
+  EXPECT_EQ(sut.get(), sut2.get());
+  EXPECT_EQ(sut.get_topic_name(), sut2.get_topic_name());
+  EXPECT_EQ(sut.get_entry_id(), sut2.get_entry_id());
+}
+
+TEST_F(HermosSmartPointerTest, copy_constructor_empty)
+{
+  // Arrange
+  hermos::ipc_shared_ptr<int> sut;
+
+  // Act & Assert
+  EXPECT_NO_THROW(hermos::ipc_shared_ptr<int> sut2{sut});
+  EXPECT_EQ(release_subscriber_reference_mock_called_count, 0);
+}
+
+TEST_F(HermosSmartPointerTest, copy_assignment_normal)
+{
+  // Arrange
+  int * ptr = new int(0);
+  int * ptr2 = new int(1);
+  std::string dummy_tn2 = "dummy2";
+  topic_local_id_t dummy_pubsub_id2 = 2;
+  int64_t dummy_entry_id2 = 3;
+
+  hermos::ipc_shared_ptr<int> sut{ptr, dummy_tn, dummy_pubsub_id, dummy_entry_id};
+  hermos::ipc_shared_ptr<int> sut2{ptr2, dummy_tn2, dummy_pubsub_id2, dummy_entry_id2};
+
+  // Act
+  sut2 = sut;
+
+  // Assert
+  // sut2's old reference is released (was the only reference), then copy happens (no ioctl).
+  EXPECT_EQ(release_subscriber_reference_mock_called_count, 1);
+  EXPECT_EQ(ptr, sut2.get());
+  EXPECT_EQ(dummy_tn, sut2.get_topic_name());
+  EXPECT_EQ(dummy_pubsub_id, sut2.get_pubsub_id());
+  EXPECT_EQ(dummy_entry_id, sut2.get_entry_id());
+}
+
+TEST_F(HermosSmartPointerTest, copy_assignment_self)
+{
+  // Arrange
+  int * ptr = new int(0);
+  hermos::ipc_shared_ptr<int> sut{ptr, dummy_tn, dummy_pubsub_id, dummy_entry_id};
+
+  // Act
+  sut = sut;
+
+  // Assert
+  // Self-assignment is a no-op.
+  EXPECT_EQ(release_subscriber_reference_mock_called_count, 0);
+  EXPECT_EQ(ptr, sut.get());
+  EXPECT_EQ(dummy_tn, sut.get_topic_name());
+  EXPECT_EQ(dummy_pubsub_id, sut.get_pubsub_id());
+  EXPECT_EQ(dummy_entry_id, sut.get_entry_id());
+}
+
+TEST_F(HermosSmartPointerTest, copy_assignment_empty)
+{
+  // Arrange
+  hermos::ipc_shared_ptr<int> sut;
+
+  // Act
+  sut = hermos::ipc_shared_ptr<int>();
+
+  // Assert
+  // Both are empty, no ioctl calls.
+  EXPECT_EQ(release_subscriber_reference_mock_called_count, 0);
+}
+
+TEST_F(HermosSmartPointerTest, move_constructor_normal)
+{
+  // Arrange
+  int * ptr = new int(0);
+  hermos::ipc_shared_ptr<int> sut{ptr, dummy_tn, dummy_pubsub_id, dummy_entry_id};
+
+  // Act
+  hermos::ipc_shared_ptr<int> sut2 = std::move(sut);
+
+  // Assert
+  // Move transfers ownership, no ioctl calls.
+  EXPECT_EQ(release_subscriber_reference_mock_called_count, 0);
+  EXPECT_EQ(nullptr, sut.get());
+  EXPECT_EQ(ptr, sut2.get());
+  EXPECT_EQ(dummy_tn, sut2.get_topic_name());
+  EXPECT_EQ(dummy_entry_id, sut2.get_entry_id());
+}
+
+TEST_F(HermosSmartPointerTest, move_assignment_normal)
+{
+  // Arrange
+  int * ptr = new int(0);
+  hermos::ipc_shared_ptr<int> sut{ptr, dummy_tn, dummy_pubsub_id, dummy_entry_id};
+  hermos::ipc_shared_ptr<int> sut2;
+
+  // Act
+  sut2 = std::move(sut);
+
+  // Assert
+  // sut2 was empty, so reset does nothing. Move transfers ownership, no ioctl calls.
+  EXPECT_EQ(release_subscriber_reference_mock_called_count, 0);
+  EXPECT_EQ(nullptr, sut.get());
+  EXPECT_EQ(ptr, sut2.get());
+  EXPECT_EQ(dummy_tn, sut2.get_topic_name());
+  EXPECT_EQ(dummy_entry_id, sut2.get_entry_id());
+}
+
+TEST_F(HermosSmartPointerTest, move_assignment_self)
+{
+  // Arrange
+  int * ptr = new int(0);
+  hermos::ipc_shared_ptr<int> sut{ptr, dummy_tn, dummy_pubsub_id, dummy_entry_id};
+
+  // Act
+#pragma GCC diagnostic push
+#if defined(__clang__) || (defined(__GNUC__) && __GNUC__ >= 13)
+#pragma GCC diagnostic ignored "-Wself-move"
+#endif
+  sut = std::move(sut);
+#pragma GCC diagnostic pop
+
+  // Assert
+  // Self-assignment is a no-op.
+  EXPECT_EQ(release_subscriber_reference_mock_called_count, 0);
+  EXPECT_EQ(ptr, sut.get());
+  EXPECT_EQ(dummy_tn, sut.get_topic_name());
+  EXPECT_EQ(dummy_entry_id, sut.get_entry_id());
+}
+
+TEST_F(HermosSmartPointerTest, dereference_operator)
+{
+  // Arrange
+  int * ptr = new int(0);
+  hermos::ipc_shared_ptr<int> sut{ptr, dummy_tn, dummy_pubsub_id, dummy_entry_id};
+
+  // Act
+  int & result = *sut;
+
+  // Assert
+  EXPECT_EQ(ptr, &result);
+}
+
+TEST_F(HermosSmartPointerTest, arrow_operator)
+{
+  // Arrange
+  hermos::ipc_shared_ptr<std::vector<int>> sut{
+    new std::vector<int>{0}, dummy_tn, dummy_pubsub_id, dummy_entry_id};
+
+  // Act
+  size_t result = sut->size();
+
+  // Assert
+  EXPECT_EQ(1, result);
+}
+
+TEST_F(HermosSmartPointerTest, bool_operator_true)
+{
+  // Arrange
+  hermos::ipc_shared_ptr<int> sut{new int(0), dummy_tn, dummy_pubsub_id, dummy_entry_id};
+
+  // Act
+  bool result = static_cast<bool>(sut);
+
+  // Assert
+  EXPECT_TRUE(result);
+}
+
+TEST_F(HermosSmartPointerTest, bool_operator_false)
+{
+  // Arrange
+  hermos::ipc_shared_ptr<int> sut;
+
+  // Act
+  bool result = static_cast<bool>(sut);
+
+  // Assert
+  EXPECT_FALSE(result);
+}
+
+// =========================================
+// Publisher-side invalidation tests
+// =========================================
+
+class HermosInvalidationTest : public ::testing::Test
+{
+protected:
+  void SetUp() override
+  {
+    rclcpp::init(0, nullptr);
+    dummy_tn = "/dummy";
+    node = std::make_shared<rclcpp::Node>("dummy_node");
+    dummy_publisher =
+      hermos::create_publisher<std_msgs::msg::Int32>(node.get(), dummy_tn, dummy_qos);
+
+    publish_core_mock_called_count = 0;
+    mock_borrowed_publisher_num = 0;
+  }
+
+  void TearDown() override { rclcpp::shutdown(); }
+
+  std::shared_ptr<rclcpp::Node> node;
+  hermos::Publisher<std_msgs::msg::Int32>::SharedPtr dummy_publisher;
+  std::string dummy_tn;
+  rclcpp::QoS dummy_qos{10};
+};
+
+TEST_F(HermosInvalidationTest, dereference_after_publish_terminates)
+{
+  // Arrange: Borrow a message, make a copy, then publish.
+  hermos::ipc_shared_ptr<std_msgs::msg::Int32> message = dummy_publisher->borrow_loaned_message();
+  hermos::ipc_shared_ptr<std_msgs::msg::Int32> copy = message;
+  dummy_publisher->publish(std::move(message));
+
+  // Act & Assert: Dereferencing the copy after publish should call std::terminate().
+  EXPECT_DEATH(*copy, "invalidated ipc_shared_ptr");
+}
+
+TEST_F(HermosInvalidationTest, arrow_operator_after_publish_terminates)
+{
+  // Arrange: Borrow a message, make a copy, then publish.
+  hermos::ipc_shared_ptr<std_msgs::msg::Int32> message = dummy_publisher->borrow_loaned_message();
+  hermos::ipc_shared_ptr<std_msgs::msg::Int32> copy = message;
+  dummy_publisher->publish(std::move(message));
+
+  // Act & Assert: Using arrow operator on the copy after publish should call std::terminate().
+  EXPECT_DEATH(copy->data, "invalidated ipc_shared_ptr");
+}
+
+TEST_F(HermosInvalidationTest, get_returns_nullptr_after_publish)
+{
+  // Arrange: Borrow a message, make a copy, then publish.
+  hermos::ipc_shared_ptr<std_msgs::msg::Int32> message = dummy_publisher->borrow_loaned_message();
+  hermos::ipc_shared_ptr<std_msgs::msg::Int32> copy = message;
+  dummy_publisher->publish(std::move(message));
+
+  // Act & Assert: get() should return nullptr after invalidation.
+  EXPECT_EQ(copy.get(), nullptr);
+}
+
+TEST_F(HermosInvalidationTest, bool_operator_returns_false_after_publish)
+{
+  // Arrange: Borrow a message, make a copy, then publish.
+  hermos::ipc_shared_ptr<std_msgs::msg::Int32> message = dummy_publisher->borrow_loaned_message();
+  hermos::ipc_shared_ptr<std_msgs::msg::Int32> copy = message;
+  dummy_publisher->publish(std::move(message));
+
+  // Act & Assert: bool operator should return false after invalidation.
+  EXPECT_FALSE(static_cast<bool>(copy));
+}
+
+TEST_F(HermosInvalidationTest, multiple_copies_all_invalidated)
+{
+  // Arrange: Borrow a message, make multiple copies, then publish.
+  hermos::ipc_shared_ptr<std_msgs::msg::Int32> message = dummy_publisher->borrow_loaned_message();
+  hermos::ipc_shared_ptr<std_msgs::msg::Int32> copy1 = message;
+  hermos::ipc_shared_ptr<std_msgs::msg::Int32> copy2 = message;
+  hermos::ipc_shared_ptr<std_msgs::msg::Int32> copy3 = copy1;
+  dummy_publisher->publish(std::move(message));
+
+  // Act & Assert: All copies should be invalidated.
+  EXPECT_EQ(copy1.get(), nullptr);
+  EXPECT_EQ(copy2.get(), nullptr);
+  EXPECT_EQ(copy3.get(), nullptr);
+  EXPECT_FALSE(static_cast<bool>(copy1));
+  EXPECT_FALSE(static_cast<bool>(copy2));
+  EXPECT_FALSE(static_cast<bool>(copy3));
+}
+
+TEST_F(HermosInvalidationTest, copy_of_copy_invalidated)
+{
+  // Arrange: Create a chain of copies: original -> copy1 -> copy2
+  hermos::ipc_shared_ptr<std_msgs::msg::Int32> message = dummy_publisher->borrow_loaned_message();
+  hermos::ipc_shared_ptr<std_msgs::msg::Int32> copy1 = message;
+  hermos::ipc_shared_ptr<std_msgs::msg::Int32> copy2 = copy1;
+  dummy_publisher->publish(std::move(message));
+
+  // Act & Assert: Dereferencing copy2 (copy of copy) should also terminate.
+  EXPECT_DEATH(*copy2, "invalidated ipc_shared_ptr");
+}
+
+// =========================================
+// CallbackInfo tests
+// =========================================
+
+class HermosCallbackInfoTest : public ::testing::Test
+{
+protected:
+  void SetUp() override
+  {
+    dummy_tn = "dummy";
+    dummy_pubsub_id = 1;
+  }
+
+  std::string dummy_tn;
+  topic_local_id_t dummy_pubsub_id;
+};
+
+TEST_F(HermosCallbackInfoTest, get_erased_callback_normal)
+{
+  // Arrange
+  bool callback_called = false;
+  int data = 0;
+  // Use subscriber-side constructor (4 args with entry_id) to avoid publisher-side delete behavior.
+  hermos::TypedMessagePtr<int> int_arg{
+    hermos::ipc_shared_ptr<int>(&data, dummy_tn, dummy_pubsub_id, /*entry_id=*/1)};
+  auto int_callback = [&](const hermos::ipc_shared_ptr<int> & /*unused_arg*/) {
+    callback_called = true;
+  };
+
+  // Act
+  hermos::TypeErasedCallback erased_callback = hermos::get_erased_callback<int>(int_callback);
+  erased_callback(std::move(int_arg));
+
+  // Assert
+  EXPECT_TRUE(callback_called);
+}
+
+TEST_F(HermosCallbackInfoTest, get_erased_callback_invalid_type)
+{
+  // Arrange
+  int data = 0;
+  // Use subscriber-side constructor (4 args with entry_id) to avoid publisher-side delete behavior.
+  hermos::TypedMessagePtr<int> int_arg{
+    hermos::ipc_shared_ptr<int>(&data, dummy_tn, dummy_pubsub_id, /*entry_id=*/1)};
+  auto float_callback = [&](hermos::ipc_shared_ptr<float> /*unused_arg*/) {};
+
+  // Act & Assert
+  hermos::TypeErasedCallback erased_callback =
+    hermos::get_erased_callback<float>(float_callback);
+  EXPECT_EXIT(
+    erased_callback(std::move(int_arg)), ::testing::ExitedWithCode(EXIT_FAILURE),
+    "Hermos internal implementation error: bad allocation when callback is called");
+}
+
+TEST_F(HermosCallbackInfoTest, get_erased_callback_const_ptr)
+{
+  // Arrange
+  bool callback_called = false;
+  int data = 0;
+  // Use subscriber-side constructor (4 args with entry_id) since publisher-side constructor is
+  // private (users must use borrow_loaned_message()).
+  hermos::TypedMessagePtr<int> int_arg{
+    hermos::ipc_shared_ptr<int>(&data, dummy_tn, dummy_pubsub_id, /*entry_id=*/1)};
+  auto const_callback = [&](const hermos::ipc_shared_ptr<const int> & /*unused_arg*/) {
+    callback_called = true;
+  };
+
+  // Act
+  hermos::TypeErasedCallback erased_callback = hermos::get_erased_callback<int>(const_callback);
+  erased_callback(std::move(int_arg));
+
+  // Assert
+  EXPECT_TRUE(callback_called);
+}
+
+// =========================================
+// ID overflow tests
+// =========================================
+
+TEST(AllocateCallbackInfoIdTest, throws_when_id_has_reserved_epoll_flag_bits)
+{
+  // Arrange: Set next_callback_info_id to MAX_CALLBACK_INFO_ID so the next allocation overflows the
+  // boundary.
+  const uint32_t original = next_callback_info_id.load();
+  next_callback_info_id.store(MAX_CALLBACK_INFO_ID);
+
+  // Act & Assert
+  EXPECT_THROW(allocate_callback_info_id(), std::runtime_error);
+
+  // Cleanup
+  next_callback_info_id.store(original);
+}
+
+TEST(AllocateCallbackInfoIdTest, succeeds_just_below_reserved_range)
+{
+  // Arrange: Set next_callback_info_id to the maximum valid value (one below MAX_CALLBACK_INFO_ID).
+  const uint32_t original = next_callback_info_id.load();
+  next_callback_info_id.store(MAX_CALLBACK_INFO_ID - 1);
+
+  // Act & Assert
+  EXPECT_EQ(allocate_callback_info_id(), MAX_CALLBACK_INFO_ID - 1);
+
+  // Cleanup
+  next_callback_info_id.store(original);
+}
+
+TEST_F(HermosSmartPointerTest, converting_copy_constructor)
+{
+  // Arrange
+  int * ptr = new int(0);
+  hermos::ipc_shared_ptr<int> sut{ptr, dummy_tn, dummy_pubsub_id, dummy_entry_id};
+
+  // Act
+  hermos::ipc_shared_ptr<const int> sut2 = sut;
+
+  // Assert
+  EXPECT_EQ(ptr, sut.get());
+  EXPECT_EQ(ptr, sut2.get());
+  EXPECT_EQ(dummy_tn, sut2.get_topic_name());
+  EXPECT_EQ(dummy_entry_id, sut2.get_entry_id());
+}
+
+TEST_F(HermosSmartPointerTest, converting_move_constructor)
+{
+  // Arrange
+  int * ptr = new int(0);
+  hermos::ipc_shared_ptr<int> sut{ptr, dummy_tn, dummy_pubsub_id, dummy_entry_id};
+
+  // Act
+  hermos::ipc_shared_ptr<const int> sut2 = std::move(sut);
+
+  // Assert
+  EXPECT_EQ(nullptr, sut.get());
+  EXPECT_EQ(ptr, sut2.get());
+  EXPECT_EQ(dummy_tn, sut2.get_topic_name());
+  EXPECT_EQ(dummy_entry_id, sut2.get_entry_id());
+}
+
+TEST_F(HermosSmartPointerTest, converting_copy_assignment)
+{
+  // Arrange
+  int * ptr = new int(0);
+  hermos::ipc_shared_ptr<int> sut{ptr, dummy_tn, dummy_pubsub_id, dummy_entry_id};
+  hermos::ipc_shared_ptr<const int> sut2;
+
+  // Act
+  sut2 = sut;
+
+  // Assert
+  EXPECT_EQ(ptr, sut.get());
+  EXPECT_EQ(ptr, sut2.get());
+  EXPECT_EQ(dummy_tn, sut2.get_topic_name());
+  EXPECT_EQ(dummy_entry_id, sut2.get_entry_id());
+}
+
+TEST_F(HermosSmartPointerTest, converting_move_assignment)
+{
+  // Arrange
+  int * ptr = new int(0);
+  hermos::ipc_shared_ptr<int> sut{ptr, dummy_tn, dummy_pubsub_id, dummy_entry_id};
+  hermos::ipc_shared_ptr<const int> sut2;
+
+  // Act
+  sut2 = std::move(sut);
+
+  // Assert
+  EXPECT_EQ(nullptr, sut.get());
+  EXPECT_EQ(ptr, sut2.get());
+  EXPECT_EQ(dummy_tn, sut2.get_topic_name());
+  EXPECT_EQ(dummy_entry_id, sut2.get_entry_id());
+}

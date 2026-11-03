@@ -4,7 +4,7 @@
 CONFIG_KUNIT=y
 CONFIG_KUNIT_DEBUGFS=y
 
-# Agnocast resolves topics per IPC namespace (current->nsproxy->ipc_ns).
+# Hermos resolves topics per IPC namespace (current->nsproxy->ipc_ns).
 CONFIG_SYSVIPC=y
 CONFIG_NAMESPACES=y
 CONFIG_IPC_NS=y

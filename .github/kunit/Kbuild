@@ -1,23 +1,23 @@
 # SPDX-License-Identifier: GPL-2.0-only OR BSD-2-Clause
 #
 # In-tree kbuild file used only by the CI in .github/workflows/kunit.yaml, which
-# copies the Agnocast sources into the kernel tree and drops this in as their
+# copies the Hermos sources into the kernel tree and drops this in as their
 # Makefile so the KUnit suite is built into the kernel (built-in, not a module).
 #
-# The core object list mirrors the KUNIT_BUILD=y branch of agnocast_kmod/Makefile;
-# the test objects are shared via agnocast_kunit/Makefile.inc, so only this list
+# The core object list mirrors the KUNIT_BUILD=y branch of hermos_kmod/Makefile;
+# the test objects are shared via hermos_kunit/Makefile.inc, so only this list
 # needs syncing when a new top-level source file is added.
-obj-$(CONFIG_KUNIT) += agnocast_kunit.o
+obj-$(CONFIG_KUNIT) += hermos_kunit.o
 
-agnocast_kunit-objs := \
-  agnocast_kunit_main.o \
-  agnocast_main.o \
-  agnocast_memory_allocator.o \
-  agnocast_init.o \
-  agnocast_exit.o \
-  agnocast_ioctl.o \
-  agnocast_internal.o
+hermos_kunit-objs := \
+  hermos_kunit_main.o \
+  hermos_main.o \
+  hermos_memory_allocator.o \
+  hermos_init.o \
+  hermos_exit.o \
+  hermos_ioctl.o \
+  hermos_internal.o
 
-include $(src)/agnocast_kunit/Makefile.inc
+include $(src)/hermos_kunit/Makefile.inc
 
 ccflags-y += -DKUNIT_BUILD -DVERSION='"ci-kunit"'

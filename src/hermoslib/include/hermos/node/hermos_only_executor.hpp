@@ -1,0 +1,145 @@
+#pragma once
+
+#include "hermos/hermos_epoll.hpp"
+#include "hermos/hermos_epoll_update_dispatcher.hpp"
+#include "hermos/hermos_public_api.hpp"
+#include "rclcpp/callback_group.hpp"
+#include "rclcpp/node_interfaces/node_base_interface.hpp"
+#include "rcpputils/thread_safety_annotations.hpp"
+
+#include <atomic>
+#include <list>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <vector>
+
+namespace hermos
+{
+
+using WeakCallbackGroupsToNodesMap = std::map<
+  rclcpp::CallbackGroup::WeakPtr, rclcpp::node_interfaces::NodeBaseInterface::WeakPtr,
+  std::owner_less<rclcpp::CallbackGroup::WeakPtr>>;
+
+struct HermosExecutable;
+class Node;
+
+/**
+ * @brief Base class for Stage 2 executors that handle only Hermos callbacks (no RMW). Used with
+ * hermos::Node.
+ *
+ * One-shot: once cancel() is called, spin() will not run again on the same instance -- create a
+ * new executor instead. All current uses (clock executor, CIE child executors) are recreated.
+ * TODO: to support re-spin, replace the spinning_ / cancel_requested_ flags with one atomic state
+ * enum (Idle / Spinning / Cancelled) so spin() can re-arm to Idle on exit.
+ */
+HERMOS_PUBLIC
+class HermosOnlyExecutor
+{
+protected:
+  std::atomic_bool spinning_{false};
+  // Sticky cancel flag: set by cancel(), never cleared, so a cancel() before spin() is not lost
+  // when spin() does spinning_.exchange(true). Never cleared -> the executor is one-shot.
+  std::atomic_bool cancel_requested_{false};
+  std::unique_ptr<EpollManager> epoll_manager_;
+  int shutdown_event_fd_;
+  pid_t my_pid_;
+
+  EpollUpdateTracker epoll_update_tracker_;
+
+  // Lock ordering: When both mutexes are needed, always acquire
+  // ready_hermos_executables_mutex_ before mutex_ to prevent deadlocks.
+  std::mutex ready_hermos_executables_mutex_;
+  std::vector<HermosExecutable> ready_hermos_executables_;
+
+  mutable std::mutex mutex_;
+  WeakCallbackGroupsToNodesMap weak_groups_associated_with_executor_to_nodes_
+    RCPPUTILS_TSA_GUARDED_BY(mutex_);
+  WeakCallbackGroupsToNodesMap weak_groups_to_nodes_associated_with_executor_
+    RCPPUTILS_TSA_GUARDED_BY(mutex_);
+  std::list<rclcpp::node_interfaces::NodeBaseInterface::WeakPtr> weak_nodes_
+    RCPPUTILS_TSA_GUARDED_BY(mutex_);
+
+  bool get_next_hermos_executable(HermosExecutable & hermos_executable, const int timeout_ms);
+  bool get_next_ready_hermos_executable(HermosExecutable & hermos_executable);
+  void execute_hermos_executable(HermosExecutable & hermos_executable);
+
+  bool is_callback_group_associated(const rclcpp::CallbackGroup::SharedPtr & group);
+
+  void add_callback_groups_from_nodes_associated_to_executor();
+
+public:
+  /// Construct the executor.
+  HERMOS_PUBLIC
+  explicit HermosOnlyExecutor();
+
+  virtual ~HermosOnlyExecutor();
+
+  /// Block the calling thread and process Hermos callbacks in a loop until cancel() is called.
+  /// One-shot: if cancel() was already called, spin() returns at once (see class comment).
+  HERMOS_PUBLIC
+  virtual void spin() = 0;
+
+  /// Request the executor to stop spinning. Causes the current spin() call to return.
+  /// One-shot: once called, the executor is permanently stopped -- every subsequent spin()
+  /// returns immediately. Create a new instance to spin again.
+  HERMOS_PUBLIC
+  virtual void cancel();
+
+  /// Add a callback group to this executor.
+  /// @param group_ptr Callback group to add.
+  /// @param node_ptr Node the group belongs to.
+  /// @param notify If true, wake the executor so it picks up the change immediately.
+  HERMOS_PUBLIC
+  void add_callback_group(
+    rclcpp::CallbackGroup::SharedPtr group_ptr,
+    rclcpp::node_interfaces::NodeBaseInterface::SharedPtr node_ptr, bool notify = true);
+
+  /// Remove a callback group from this executor.
+  /// @param group_ptr Callback group to remove.
+  /// @param notify If true, wake the executor so it picks up the change immediately.
+  HERMOS_PUBLIC
+  void remove_callback_group(rclcpp::CallbackGroup::SharedPtr group_ptr, bool notify = true);
+
+  /// Return all callback groups known to this executor.
+  /// @return Vector of weak pointers to callback groups.
+  HERMOS_PUBLIC
+  std::vector<rclcpp::CallbackGroup::WeakPtr> get_all_callback_groups();
+
+  /// Return callback groups that were manually added.
+  /// @return Vector of weak pointers to callback groups.
+  HERMOS_PUBLIC
+  std::vector<rclcpp::CallbackGroup::WeakPtr> get_manually_added_callback_groups();
+
+  /// Return callback groups automatically discovered from added nodes.
+  /// @return Vector of weak pointers to callback groups.
+  HERMOS_PUBLIC
+  std::vector<rclcpp::CallbackGroup::WeakPtr> get_automatically_added_callback_groups_from_nodes();
+
+  /// Add a node to this executor.
+  /// @param node_ptr Node to add.
+  /// @param notify If true, wake the executor so it picks up the change immediately.
+  HERMOS_PUBLIC
+  void add_node(rclcpp::node_interfaces::NodeBaseInterface::SharedPtr node_ptr, bool notify = true);
+
+  /// Add a node to this executor.
+  /// @param node Node to add.
+  /// @param notify If true, wake the executor so it picks up the change immediately.
+  HERMOS_PUBLIC
+  void add_node(const std::shared_ptr<hermos::Node> & node, bool notify = true);
+
+  /// Remove a node from this executor.
+  /// @param node_ptr Node to remove.
+  /// @param notify If true, wake the executor so it picks up the change immediately.
+  HERMOS_PUBLIC
+  void remove_node(
+    rclcpp::node_interfaces::NodeBaseInterface::SharedPtr node_ptr, bool notify = true);
+
+  /// Remove a node from this executor.
+  /// @param node Node to remove.
+  /// @param notify If true, wake the executor so it picks up the change immediately.
+  HERMOS_PUBLIC
+  void remove_node(const std::shared_ptr<hermos::Node> & node, bool notify = true);
+};
+
+}  // namespace hermos

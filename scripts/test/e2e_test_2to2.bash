@@ -1,8 +1,8 @@
 #!/bin/bash
 
-if ! grep -q "^agnocast " /proc/modules; then
-    echo "ERROR: agnocast kernel module is not loaded." >&2
-    echo "Load it first: sudo insmod agnocast_kmod/agnocast.ko" >&2
+if ! grep -q "^hermos " /proc/modules; then
+    echo "ERROR: hermos kernel module is not loaded." >&2
+    echo "Load it first: sudo insmod hermos_kmod/hermos.ko" >&2
     exit 1
 fi
 
@@ -20,7 +20,7 @@ usage() {
     echo "  -h, --help         Show this help message"
     echo "  -s, --single       Run only one test case (Native mode, current config)"
     echo "  -c, --continue     Continue running tests even if one fails"
-    echo "  -b, --bridge-only  Run only bridge tests (ros2agno, agno2ros) with AGNOCAST_BRIDGE_MODE=on"
+    echo "  -b, --bridge-only  Run only bridge tests (ros2agno, agno2ros) with HERMOS_BRIDGE_MODE=on"
     exit 0
 }
 
@@ -42,7 +42,7 @@ while true; do
         ;;
     -b | --bridge-only)
         BRIDGE_ONLY=true
-        export AGNOCAST_BRIDGE_MODE=on
+        export HERMOS_BRIDGE_MODE=on
         shift
         ;;
     --)
@@ -56,12 +56,12 @@ while true; do
 done
 
 # Setup
-rm -rf build/agnocast_e2e_test install/e2e_test
+rm -rf build/hermos_e2e_test install/e2e_test
 source /opt/ros/${ROS_DISTRO}/setup.bash
-colcon build --symlink-install --packages-select agnocast_e2e_test --cmake-args -DCMAKE_BUILD_TYPE=Release
+colcon build --symlink-install --packages-select hermos_e2e_test --cmake-args -DCMAKE_BUILD_TYPE=Release
 source install/setup.bash
 
-LOWER_BRIDGE_MODE=$(echo "$AGNOCAST_BRIDGE_MODE" | tr '[:upper:]' '[:lower:]')
+LOWER_BRIDGE_MODE=$(echo "$HERMOS_BRIDGE_MODE" | tr '[:upper:]' '[:lower:]')
 CURRENT_BRIDGE_DISPLAY=${LOWER_BRIDGE_MODE:-"on (default)"}
 echo "Bridge mode: $CURRENT_BRIDGE_DISPLAY" | sudo tee /dev/kmsg
 
@@ -90,7 +90,7 @@ if [ "$LOWER_BRIDGE_MODE" != "off" ] && [ "$LOWER_BRIDGE_MODE" != "0" ]; then
 fi
 
 # Run test
-CONFIG_FILE=src/agnocast_e2e_test/test/config_test_2to2.yaml
+CONFIG_FILE=src/hermos_e2e_test/test/config_test_2to2.yaml
 show_config() {
     echo "----------------------------------------------" | sudo tee /dev/kmsg
     echo "Test Mode: $TEST_MODE" | sudo tee /dev/kmsg
@@ -103,7 +103,7 @@ if [ "$RUN_SINGLE" = true ]; then
     CURRENT_YAML_MODE=$(grep "^test_mode:" "$CONFIG_FILE" | awk '{print $2}' | tr -d '"')
     export TEST_MODE=${CURRENT_YAML_MODE}
     show_config
-    launch_test src/agnocast_e2e_test/test/test_2to2.py test_mode:="$TEST_MODE"
+    launch_test src/hermos_e2e_test/test/test_2to2.py test_mode:="$TEST_MODE"
     if [ $? -ne 0 ]; then
         echo "Test failed" | sudo tee /dev/kmsg
         exit 1
@@ -140,7 +140,7 @@ else
 
             echo "====================== $CURRENT_COUNT / $TOTAL_TESTS (Mode: $mode) ======================" | sudo tee /dev/kmsg
             show_config
-            launch_test src/agnocast_e2e_test/test/test_2to2.py test_mode:=$mode
+            launch_test src/hermos_e2e_test/test/test_2to2.py test_mode:=$mode
 
             if [ $? -ne 0 ]; then
                 echo "Test failed at Mode: $mode, Layout: $layout" | sudo tee /dev/kmsg

@@ -1,7 +1,7 @@
 #!/bin/bash
 #
-# E2E regression smoke test for the ros2agnocast CLI verbs after they
-# learned to subscribe to /_agnocast_discovery and merge cross-NS /
+# E2E regression smoke test for the ros2hermos CLI verbs after they
+# learned to subscribe to /_hermos_discovery and merge cross-NS /
 # cross-ECU state.
 #
 # This script does not actually create multiple IPC namespaces (that
@@ -10,7 +10,7 @@
 #
 #   * Each verb accepts `--gossip-timeout`.
 #   * Each verb finishes without raising when the daemon is publishing.
-#   * Local Agnocast endpoints surface in the CLI output.
+#   * Local Hermos endpoints surface in the CLI output.
 #
 # `collect_announcements()` returns every NS's snapshot including the
 # caller's own, so in this single-NS run the local agent's gossip is what
@@ -19,7 +19,7 @@
 # is exercised by separate manual unshare-based tests.
 #
 # Requires:
-#   * agnocast kernel module loaded
+#   * hermos kernel module loaded
 #   * workspace built (bash scripts/dev/build_all.bash)
 #
 # Usage:
@@ -39,9 +39,9 @@ red()    { printf '\033[31m%s\033[0m\n' "$*"; }
 green()  { printf '\033[32m%s\033[0m\n' "$*"; }
 yellow() { printf '\033[33m%s\033[0m\n' "$*"; }
 
-if ! grep -q "^agnocast " /proc/modules; then
-    red "ERROR: agnocast kmod not loaded."
-    echo "  -> sudo insmod $ROOT_DIR/agnocast_kmod/agnocast.ko" >&2
+if ! grep -q "^hermos " /proc/modules; then
+    red "ERROR: hermos kmod not loaded."
+    echo "  -> sudo insmod $ROOT_DIR/hermos_kmod/hermos.ko" >&2
     exit 1
 fi
 if [ ! -f "$ROOT_DIR/install/setup.bash" ]; then
@@ -63,10 +63,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
-yellow "Starting agnocast_discovery_agent and talker..."
-ros2 run ros2agnocast_discovery_agent discovery_agent > "$LOG_DIR/agent.log" 2>&1 &
+yellow "Starting hermos_discovery_agent and talker..."
+ros2 run ros2hermos_discovery_agent discovery_agent > "$LOG_DIR/agent.log" 2>&1 &
 sleep "$DAEMON_WARMUP_SEC"
-ros2 launch agnocast_sample_application talker.launch.xml > "$LOG_DIR/talker.log" 2>&1 &
+ros2 launch hermos_sample_application talker.launch.xml > "$LOG_DIR/talker.log" 2>&1 &
 sleep "$TALKER_WARMUP_SEC"
 
 if ! grep -q "discovery_agent up" "$LOG_DIR/agent.log"; then
@@ -84,35 +84,35 @@ fail() {
     exit 2
 }
 
-# ----- topic list_agnocast -----
-out=$(ros2 topic list_agnocast --gossip-timeout "$GOSSIP_TIMEOUT" 2>&1) \
-    || fail "topic list_agnocast exited non-zero" "$out"
+# ----- topic list_hermos -----
+out=$(ros2 topic list_hermos --gossip-timeout "$GOSSIP_TIMEOUT" 2>&1) \
+    || fail "topic list_hermos exited non-zero" "$out"
 grep -q -- "/my_topic" <<<"$out" \
-    || fail "topic list_agnocast did not include /my_topic" "$out"
-grep -- "/my_topic" <<<"$out" | grep -q "Agnocast enabled" \
-    || fail "/my_topic present but missing '(Agnocast enabled)' annotation" "$out"
-green "✓ topic list_agnocast"
+    || fail "topic list_hermos did not include /my_topic" "$out"
+grep -- "/my_topic" <<<"$out" | grep -q "Hermos enabled" \
+    || fail "/my_topic present but missing '(Hermos enabled)' annotation" "$out"
+green "✓ topic list_hermos"
 
-# ----- node list_agnocast -----
-out=$(ros2 node list_agnocast --gossip-timeout "$GOSSIP_TIMEOUT" 2>&1) \
-    || fail "node list_agnocast exited non-zero" "$out"
+# ----- node list_hermos -----
+out=$(ros2 node list_hermos --gossip-timeout "$GOSSIP_TIMEOUT" 2>&1) \
+    || fail "node list_hermos exited non-zero" "$out"
 grep -q -- "/talker_node" <<<"$out" \
-    || fail "node list_agnocast did not include /talker_node" "$out"
-green "✓ node list_agnocast"
+    || fail "node list_hermos did not include /talker_node" "$out"
+green "✓ node list_hermos"
 
-# ----- topic info_agnocast -----
-out=$(ros2 topic info_agnocast /my_topic --gossip-timeout "$GOSSIP_TIMEOUT" 2>&1) \
-    || fail "topic info_agnocast exited non-zero" "$out"
-grep -qE "Agnocast Publisher count:\s*1" <<<"$out" \
-    || fail "topic info_agnocast did not report 1 Agnocast publisher" "$out"
-green "✓ topic info_agnocast"
+# ----- topic info_hermos -----
+out=$(ros2 topic info_hermos /my_topic --gossip-timeout "$GOSSIP_TIMEOUT" 2>&1) \
+    || fail "topic info_hermos exited non-zero" "$out"
+grep -qE "Hermos Publisher count:\s*1" <<<"$out" \
+    || fail "topic info_hermos did not report 1 Hermos publisher" "$out"
+green "✓ topic info_hermos"
 
-# ----- node info_agnocast -----
-out=$(ros2 node info_agnocast /talker_node --gossip-timeout "$GOSSIP_TIMEOUT" 2>&1) \
-    || fail "node info_agnocast exited non-zero" "$out"
+# ----- node info_hermos -----
+out=$(ros2 node info_hermos /talker_node --gossip-timeout "$GOSSIP_TIMEOUT" 2>&1) \
+    || fail "node info_hermos exited non-zero" "$out"
 grep -q -- "/my_topic" <<<"$out" \
-    || fail "node info_agnocast /talker_node did not list /my_topic" "$out"
-green "✓ node info_agnocast"
+    || fail "node info_hermos /talker_node did not list /my_topic" "$out"
+green "✓ node info_hermos"
 
 green ""
 green "===== ALL CHECKS PASSED ====="

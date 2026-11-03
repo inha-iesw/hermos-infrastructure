@@ -21,22 +21,22 @@
 # single launch can't load nodes into containers on two different domains.
 #
 # Each launch is run under `timeout` so it self-terminates (SIGINT, then SIGKILL
-# after a grace period) — Agnocast container shutdown can stall on SIGINT, so we
+# after a grace period) — Hermos container shutdown can stall on SIGINT, so we
 # never block on a graceful exit.
 #
 # Run on a freshly loaded kmod — a rule must be registered before any endpoint for
-# its cells joins. This path uses no bridge, so AGNOCAST_BRIDGE_MODE=off.
+# its cells joins. This path uses no bridge, so HERMOS_BRIDGE_MODE=off.
 
 set -uo pipefail
 
-if ! grep -q "^agnocast " /proc/modules; then
-    echo "ERROR: agnocast kernel module is not loaded." >&2
-    echo "Load it first: sudo insmod agnocast_kmod/agnocast.ko" >&2
+if ! grep -q "^hermos " /proc/modules; then
+    echo "ERROR: hermos kernel module is not loaded." >&2
+    echo "Load it first: sudo insmod hermos_kmod/hermos.ko" >&2
     exit 1
 fi
 
-if ! ros2 pkg prefix ros2agnocast_discovery_agent >/dev/null 2>&1; then
-    echo "ERROR: ros2agnocast_discovery_agent not found -- source the workspace first:" >&2
+if ! ros2 pkg prefix ros2hermos_discovery_agent >/dev/null 2>&1; then
+    echo "ERROR: ros2hermos_discovery_agent not found -- source the workspace first:" >&2
     echo "  source /opt/ros/<distro>/setup.bash && source install/setup.bash" >&2
     exit 1
 fi
@@ -72,7 +72,7 @@ run_exchange() {
         echo "  \"${TOPIC}\":"
         if [ -n "$REMAP" ]; then echo "    remap: \"${REMAP}\""; fi
     } > "$cfg"
-    if ! ros2 run ros2agnocast_discovery_agent register_domain_bridge --config "$cfg"; then
+    if ! ros2 run ros2hermos_discovery_agent register_domain_bridge --config "$cfg"; then
         echo "Rule registration failed (fresh kmod? cell already has an endpoint?)." >&2
         rm -f "$cfg"; return 1
     fi
@@ -87,9 +87,9 @@ run_exchange() {
         listen_launch="$(mktemp --suffix=.launch.xml)"
         cat > "$listen_launch" <<XML
 <launch>
-  <node_container pkg="agnocast_components" exec="agnocast_component_container" name="listener_container" namespace="" output="screen">
-    <env name="LD_PRELOAD" value="libagnocast_heaphook.so:\$(env LD_PRELOAD '')" />
-    <composable_node pkg="agnocast_sample_application" plugin="NoRclcppSubscriber" name="listener_node" namespace="">
+  <node_container pkg="hermos_components" exec="hermos_component_container" name="listener_container" namespace="" output="screen">
+    <env name="LD_PRELOAD" value="libhermos_heaphook.so:\$(env LD_PRELOAD '')" />
+    <composable_node pkg="hermos_sample_application" plugin="NoRclcppSubscriber" name="listener_node" namespace="">
       <param name="topic_name" value="${REMAP}"/>
     </composable_node>
   </node_container>
@@ -98,7 +98,7 @@ XML
         listen_args=("$listen_launch")
         sub_match="I heard dynamic size array message"
     else
-        listen_args=(agnocast_sample_application listener.launch.xml)
+        listen_args=(hermos_sample_application listener.launch.xml)
         sub_match="subscribe message: id="
     fi
 
@@ -106,15 +106,15 @@ XML
 
     echo "  listener: ${sub_topic}@${to_domain} (subscriber first, ~${LISTEN_SECS}s)"
     timeout -s INT -k 5 "$LISTEN_SECS" \
-        env AGNOCAST_BRIDGE_MODE=off ROS_DOMAIN_ID="$to_domain" \
+        env HERMOS_BRIDGE_MODE=off ROS_DOMAIN_ID="$to_domain" \
         ros2 launch "${listen_args[@]}" > "$sublog" 2>&1 &
     local sub_pid=$!
     sleep 5
 
     echo "  talker:   ${TOPIC}@${from_domain} (~${TALK_SECS}s)"
     timeout -s INT -k 5 "$TALK_SECS" \
-        env AGNOCAST_BRIDGE_MODE=off ROS_DOMAIN_ID="$from_domain" \
-        ros2 launch agnocast_sample_application talker.launch.xml > "$publog" 2>&1 &
+        env HERMOS_BRIDGE_MODE=off ROS_DOMAIN_ID="$from_domain" \
+        ros2 launch hermos_sample_application talker.launch.xml > "$publog" 2>&1 &
     local pub_pid=$!
 
     wait "$sub_pid" "$pub_pid" 2>/dev/null || true

@@ -2,24 +2,24 @@
 set -eo pipefail
 
 # Pre-flight check: kernel module must be loaded before anything else
-if ! grep -q "^agnocast " /proc/modules; then
-  echo "ERROR: agnocast kernel module is not loaded." >&2
-  echo "Load it first: sudo modprobe agnocast" >&2
+if ! grep -q "^hermos " /proc/modules; then
+  echo "ERROR: hermos kernel module is not loaded." >&2
+  echo "Load it first: sudo modprobe hermos" >&2
   exit 1
 fi
 
 source /opt/ros/${ROS_DISTRO}/setup.bash
 
-colcon build --packages-up-to agnocast_e2e_test --cmake-args -DBUILD_TESTING=ON
+colcon build --packages-up-to hermos_e2e_test --cmake-args -DBUILD_TESTING=ON
 source install/setup.bash
 
 # Pre-flight check: heaphook library must exist somewhere on COLCON_PREFIX_PATH.
 # COLCON_PREFIX_PATH is colon-separated when multiple workspaces are sourced
-# (e.g. an Autoware underlay plus this Agnocast overlay), so we have to walk
+# (e.g. an Autoware underlay plus this Hermos overlay), so we have to walk
 # the list instead of dereferencing it as a single path — otherwise the test
 # fails out before colcon even runs, with an ERROR pointing at a path that
 # literally contains a `:`.
-HEAPHOOK_RELATIVE="agnocastlib/lib/libagnocast_heaphook.so"
+HEAPHOOK_RELATIVE="hermoslib/lib/libhermos_heaphook.so"
 HEAPHOOK_PATH=""
 IFS=':' read -r -a _PREFIX_ENTRIES <<< "${COLCON_PREFIX_PATH}"
 for _prefix in "${_PREFIX_ENTRIES[@]}"; do
@@ -34,7 +34,7 @@ if [ -z "${HEAPHOOK_PATH}" ]; then
   for _prefix in "${_PREFIX_ENTRIES[@]}"; do
     echo "  - ${_prefix}/${HEAPHOOK_RELATIVE}" >&2
   done
-  echo "Build agnocast_heaphook first: cd agnocast_heaphook && cargo build --release && cp target/release/libagnocast_heaphook.so install/agnocastlib/lib/" >&2
+  echo "Build hermos_heaphook first: cd hermos_heaphook && cargo build --release && cp target/release/libhermos_heaphook.so install/hermoslib/lib/" >&2
   exit 1
 fi
 

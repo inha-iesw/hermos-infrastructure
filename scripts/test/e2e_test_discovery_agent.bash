@@ -1,15 +1,15 @@
 #!/bin/bash
 #
-# E2E regression smoke test for ros2agnocast_discovery_agent.
+# E2E regression smoke test for ros2hermos_discovery_agent.
 #
 # Starts one discovery agent in the current IPC namespace, lets it run for a
-# couple of polling cycles, and verifies that an AgnocastDaemonState message
-# appears on /_agnocast_discovery with the expected fields populated. This
-# does not require any Agnocast pub / sub to be running -- the message is
+# couple of polling cycles, and verifies that an HermosDaemonState message
+# appears on /_hermos_discovery with the expected fields populated. This
+# does not require any Hermos pub / sub to be running -- the message is
 # expected to carry an empty `topics` list in that case.
 #
 # Requires:
-#   * agnocast kernel module loaded (sudo insmod agnocast_kmod/agnocast.ko)
+#   * hermos kernel module loaded (sudo insmod hermos_kmod/hermos.ko)
 #   * workspace built (bash scripts/dev/build_all.bash)
 #
 # Usage:
@@ -29,9 +29,9 @@ green()  { printf '\033[32m%s\033[0m\n' "$*"; }
 yellow() { printf '\033[33m%s\033[0m\n' "$*"; }
 
 # ----- prerequisites -----
-if ! grep -q "^agnocast " /proc/modules; then
-    red "ERROR: agnocast kmod not loaded."
-    echo "  -> sudo insmod $ROOT_DIR/agnocast_kmod/agnocast.ko" >&2
+if ! grep -q "^hermos " /proc/modules; then
+    red "ERROR: hermos kmod not loaded."
+    echo "  -> sudo insmod $ROOT_DIR/hermos_kmod/hermos.ko" >&2
     exit 1
 fi
 
@@ -52,15 +52,15 @@ cleanup() {
     # pkill -P only reaches direct children; ros2 launch spawns its
     # talker / agent as grandchildren, so also match by binary path.
     pkill -P $$ 2>/dev/null || true
-    pkill -KILL -f '/agnocast_sample_application/lib/.*/talker' 2>/dev/null || true
-    pkill -KILL -f '/ros2agnocast_discovery_agent/lib/ros2agnocast_discovery_agent/discovery_agent' 2>/dev/null || true
+    pkill -KILL -f '/hermos_sample_application/lib/.*/talker' 2>/dev/null || true
+    pkill -KILL -f '/ros2hermos_discovery_agent/lib/ros2hermos_discovery_agent/discovery_agent' 2>/dev/null || true
     sleep 1
     rm -rf "$LOG_DIR"
 }
 trap cleanup EXIT
 
-yellow "Starting agnocast_discovery_agent..."
-ros2 run ros2agnocast_discovery_agent discovery_agent > "$LOG_DIR/agent.log" 2>&1 &
+yellow "Starting hermos_discovery_agent..."
+ros2 run ros2hermos_discovery_agent discovery_agent > "$LOG_DIR/agent.log" 2>&1 &
 sleep "$DAEMON_WARMUP_SEC"
 
 if ! grep -q "discovery_agent up" "$LOG_DIR/agent.log"; then
@@ -80,36 +80,36 @@ fail() {
     exit 2
 }
 
-msg=$(timeout "$ECHO_TIMEOUT_SEC" ros2 topic echo --once /_agnocast_discovery 2>&1) \
-    || fail "ros2 topic echo on /_agnocast_discovery timed out or failed" "$msg"
+msg=$(timeout "$ECHO_TIMEOUT_SEC" ros2 topic echo --once /_hermos_discovery 2>&1) \
+    || fail "ros2 topic echo on /_hermos_discovery timed out or failed" "$msg"
 
 grep -q '^schema_version: 1$'                       <<<"$msg" || fail "schema_version != 1" "$msg"
-grep -q '^agnocast_version: \(.*\)$'                <<<"$msg" || fail "agnocast_version missing" "$msg"
-# Assert agnocast_version is non-empty so a misconfigured importlib.metadata
+grep -q '^hermos_version: \(.*\)$'                <<<"$msg" || fail "hermos_version missing" "$msg"
+# Assert hermos_version is non-empty so a misconfigured importlib.metadata
 # lookup is caught (would silently fall back to '' otherwise).
-grep -q '^agnocast_version: ..*$'                   <<<"$msg" || fail "agnocast_version is empty" "$msg"
+grep -q '^hermos_version: ..*$'                   <<<"$msg" || fail "hermos_version is empty" "$msg"
 grep -q '^host_uuid: [0-9a-f-]\+$'                  <<<"$msg" || fail "host_uuid missing or malformed" "$msg"
 grep -q '^host_hostname: '                          <<<"$msg" || fail "host_hostname missing" "$msg"
 grep -q '^ipc_ns_inode: [0-9]\+$'                   <<<"$msg" || fail "ipc_ns_inode missing or non-numeric" "$msg"
 grep -q '^topics:'                                  <<<"$msg" || fail "topics field missing" "$msg"
-green "✓ AgnocastDaemonState shape OK (schema_version, agnocast_version, host_uuid, host_hostname, ipc_ns_inode, topics)"
+green "✓ HermosDaemonState shape OK (schema_version, hermos_version, host_uuid, host_hostname, ipc_ns_inode, topics)"
 
 # ----- QoS sanity (Reliable + TransientLocal + Liveliness Automatic) -----
-qos=$(timeout "$ECHO_TIMEOUT_SEC" ros2 topic info /_agnocast_discovery --verbose 2>&1) \
-    || fail "ros2 topic info on /_agnocast_discovery failed" "$qos"
+qos=$(timeout "$ECHO_TIMEOUT_SEC" ros2 topic info /_hermos_discovery --verbose 2>&1) \
+    || fail "ros2 topic info on /_hermos_discovery failed" "$qos"
 grep -q "Reliability: RELIABLE"          <<<"$qos" || fail "QoS reliability != RELIABLE" "$qos"
 grep -q "Durability: TRANSIENT_LOCAL"    <<<"$qos" || fail "QoS durability != TRANSIENT_LOCAL" "$qos"
 grep -q "Liveliness: AUTOMATIC"          <<<"$qos" || fail "QoS liveliness != AUTOMATIC" "$qos"
 green "✓ QoS profile: RELIABLE + TRANSIENT_LOCAL + Liveliness AUTOMATIC"
 
 # ----- pop a talker in the same IPC NS and assert its endpoint shows up -----
-yellow "Starting agnocast_sample_application talker (discovery_agent=false to avoid a 2nd agent)..."
-ros2 launch agnocast_sample_application talker.launch.xml discovery_agent:=false \
+yellow "Starting hermos_sample_application talker (discovery_agent=false to avoid a 2nd agent)..."
+ros2 launch hermos_sample_application talker.launch.xml discovery_agent:=false \
     > "$LOG_DIR/talker.log" 2>&1 &
 # Give the talker time to call its Publisher<T> ctor and the daemon time to
 # observe it on its next 1 Hz tick.
 sleep 3
-msg_with_topic=$(timeout "$ECHO_TIMEOUT_SEC" ros2 topic echo --once /_agnocast_discovery 2>&1) \
+msg_with_topic=$(timeout "$ECHO_TIMEOUT_SEC" ros2 topic echo --once /_hermos_discovery 2>&1) \
     || fail "ros2 topic echo (with talker running) timed out" "$msg_with_topic"
 
 grep -q 'topic_name: /my_topic'      <<<"$msg_with_topic" || fail "talker's /my_topic not seen in snapshot" "$msg_with_topic"
@@ -117,26 +117,26 @@ grep -q 'node_name: /talker_node'    <<<"$msg_with_topic" || fail "talker_node n
 green "✓ talker's /my_topic + /talker_node appear in the snapshot"
 
 # ----- assert gossip carries the ROS 2 message type from the tmpfs registry -----
-# The agent reads the per-process tmpfs file written by agnocastlib's
+# The agent reads the per-process tmpfs file written by hermoslib's
 # Publisher<T> ctor and joins (topic, role, node_name) onto the kmod's ioctl
 # output so the gossip publication has type_name + pid filled in.
-grep -q 'type_name: agnocast_sample_interfaces/msg/DynamicSizeArray' <<<"$msg_with_topic" \
+grep -q 'type_name: hermos_sample_interfaces/msg/DynamicSizeArray' <<<"$msg_with_topic" \
     || fail "gossip type_name not populated from the tmpfs registry" "$msg_with_topic"
-# At least one AgnocastEndpoint.pid should be non-zero (the talker's pid the
+# At least one HermosEndpoint.pid should be non-zero (the talker's pid the
 # registry pinned to /talker_node).
 grep -qE '^[[:space:]]+pid: [1-9][0-9]*' <<<"$msg_with_topic" \
-    || fail "no AgnocastEndpoint.pid > 0 in snapshot (registry → gossip join failed)" "$msg_with_topic"
+    || fail "no HermosEndpoint.pid > 0 in snapshot (registry → gossip join failed)" "$msg_with_topic"
 green "✓ gossip carries type_name + non-zero pid from the tmpfs type registry"
 
 # ----- assert the tmpfs file the agent reads from is actually there -----
 NS_INODE=$(stat -L -c '%i' /proc/self/ns/ipc)
-TMPFS_DIR="${AGNOCAST_TMPFS_DIR:-/dev/shm}/agnocast_type_registry/$NS_INODE"
+TMPFS_DIR="${HERMOS_TMPFS_DIR:-/dev/shm}/hermos_type_registry/$NS_INODE"
 [ -d "$TMPFS_DIR" ] || fail "tmpfs registry dir missing: $TMPFS_DIR"
 # Pick the most recent <pid>.txt (the talker just spawned) and verify the
 # format. Format is per-process: <topic>\t<type>\t<role>\t<node>\n.
 recent_file=$(ls -t "$TMPFS_DIR"/*.txt 2>/dev/null | head -1)
 [ -n "$recent_file" ] || fail "no <pid>.txt in $TMPFS_DIR" "$(ls -la "$TMPFS_DIR" 2>&1)"
-grep -qE $'^/my_topic\tagnocast_sample_interfaces/msg/DynamicSizeArray\tpub\t/talker_node$' "$recent_file" \
+grep -qE $'^/my_topic\thermos_sample_interfaces/msg/DynamicSizeArray\tpub\t/talker_node$' "$recent_file" \
     || fail "tmpfs line format unexpected in $recent_file" "$(cat "$recent_file")"
 green "✓ tmpfs registry file present at $TMPFS_DIR with the expected 4-field line"
 

@@ -30,14 +30,14 @@ IGNORE="LEADING_SPACE,POINTER_LOCATION,SUSPECT_CODE_INDENT,CODE_INDENT"
 IGNORE="$IGNORE,LINE_SPACING,BRACES,OPEN_BRACE,SPLIT_STRING,BLOCK_COMMENT_STYLE"
 IGNORE="$IGNORE,TRAILING_STATEMENTS,LINUX_VERSION_CODE"
 
-KMOD_DIR="$REPO_ROOT/agnocast_kmod"
+KMOD_DIR="$REPO_ROOT/hermos_kmod"
 mapfile -d '' TARGET_FILES < <(find "$KMOD_DIR" -type f \( -name '*.c' -o -name '*.h' \) -print0 | sort -z)
 if [[ ${#TARGET_FILES[@]} -eq 0 ]]; then
   echo "Error: no C/H source files found under $KMOD_DIR" >&2
   exit 1
 fi
 
-echo "Running checkpatch.pl on agnocast_kmod files..."
+echo "Running checkpatch.pl on hermos_kmod files..."
 echo "Ignored checks: $IGNORE"
 echo ""
 

@@ -69,15 +69,15 @@ jobs:
           done
           echo "target-paths=$target_paths" >> $GITHUB_OUTPUT
 
-      # TODO: Filter unmodified files in agnocast_kmod
+      # TODO: Filter unmodified files in hermos_kmod
       - name: Add kmod to paths
         id: add-kmod
         run: |
           target_paths="${{ steps.add-header-paths.outputs.target-paths }}"
-          target_paths="$target_paths $(realpath agnocast_kmod/agnocast_main.c)"
-          target_paths="$target_paths $(realpath agnocast_kmod/agnocast.h)"
-          target_paths="$target_paths $(realpath agnocast_kmod/agnocast_memory_allocator.c)"
-          target_paths="$target_paths $(realpath agnocast_kmod/agnocast_memory_allocator.h)"
+          target_paths="$target_paths $(realpath hermos_kmod/hermos_main.c)"
+          target_paths="$target_paths $(realpath hermos_kmod/hermos.h)"
+          target_paths="$target_paths $(realpath hermos_kmod/hermos_memory_allocator.c)"
+          target_paths="$target_paths $(realpath hermos_kmod/hermos_memory_allocator.h)"
           echo "target-paths=$target_paths" >> $GITHUB_OUTPUT
 
       - name: Run Cppcheck on modified packages

@@ -2,8 +2,8 @@
 #
 # Tests for scripts/switch_kmod.bash.
 #
-# DESTRUCTIVE: these tests touch real /var/lib/dkms/agnocast, purge and
-# reinstall agnocast-kmod-v* packages, and load/unload the kernel module.
+# DESTRUCTIVE: these tests touch real /var/lib/dkms/hermos, purge and
+# reinstall hermos-kmod-v* packages, and load/unload the kernel module.
 # Every test is expected to leave the host in the canonical state (defined
 # below) via teardown; do not run this suite on a machine you care about.
 #
@@ -33,7 +33,7 @@ setup_file() {
 	export SCRIPT SCRIPT_DIR FIXTURES_DIR CANONICAL_VER UPGRADE_VER
 
 	if ! _is_canonical; then
-		echo "ERROR: host is not in canonical state (agnocast-kmod-v${CANONICAL_VER} installed and loaded)." >&2
+		echo "ERROR: host is not in canonical state (hermos-kmod-v${CANONICAL_VER} installed and loaded)." >&2
 		echo "       Run: sudo bash $(dirname "${BATS_TEST_FILENAME}")/switch_kmod_canonical_setup.bash" >&2
 		return 1
 	fi
@@ -41,7 +41,7 @@ setup_file() {
 
 setup() {
 	if ! _is_canonical; then
-		echo "ERROR: host is not in canonical state before test '${BATS_TEST_NAME}' (agnocast-kmod-v${CANONICAL_VER} installed and loaded)." >&2
+		echo "ERROR: host is not in canonical state before test '${BATS_TEST_NAME}' (hermos-kmod-v${CANONICAL_VER} installed and loaded)." >&2
 		echo "       Run: sudo bash $(dirname "${BATS_TEST_FILENAME}")/switch_kmod_canonical_setup.bash" >&2
 		return 1
 	fi
@@ -56,34 +56,34 @@ teardown() {
 }
 
 _is_canonical() {
-	dpkg-query -W -f='${Status}' "agnocast-kmod-v${CANONICAL_VER}" 2>/dev/null \
+	dpkg-query -W -f='${Status}' "hermos-kmod-v${CANONICAL_VER}" 2>/dev/null \
 		| grep -q "install ok installed" \
-		&& lsmod | awk '{print $1}' | grep -qx agnocast
+		&& lsmod | awk '{print $1}' | grep -qx hermos
 }
 
 _restore_canonical() {
-	modprobe -r agnocast 2>/dev/null || true
+	modprobe -r hermos 2>/dev/null || true
 
 	local installed
-	installed=$(dpkg-query -W -f='${Package} ${Status}\n' 'agnocast-kmod-v*' 2>/dev/null \
+	installed=$(dpkg-query -W -f='${Package} ${Status}\n' 'hermos-kmod-v*' 2>/dev/null \
 		| awk '$NF == "installed" {print $1}' || true)
 	if [ -n "${installed}" ]; then
 		# shellcheck disable=SC2086
 		apt-get purge -y ${installed} >/dev/null
 	fi
 
-	rm -rf /var/lib/dkms/agnocast
-	rm -f "/lib/modules/$(uname -r)/updates/dkms/agnocast.ko" \
-	      "/lib/modules/$(uname -r)/updates/dkms/agnocast.ko.zst"
+	rm -rf /var/lib/dkms/hermos
+	rm -f "/lib/modules/$(uname -r)/updates/dkms/hermos.ko" \
+	      "/lib/modules/$(uname -r)/updates/dkms/hermos.ko.zst"
 	depmod -a >/dev/null 2>&1 || true
 
-	if ! apt-get install -y "agnocast-kmod-v${CANONICAL_VER}" >/dev/null 2>&1; then
+	if ! apt-get install -y "hermos-kmod-v${CANONICAL_VER}" >/dev/null 2>&1; then
 		local deb
-		deb=$(ls "${FIXTURES_DIR}/agnocast-kmod-v${CANONICAL_VER}"_*.deb 2>/dev/null | head -n 1)
+		deb=$(ls "${FIXTURES_DIR}/hermos-kmod-v${CANONICAL_VER}"_*.deb 2>/dev/null | head -n 1)
 		[ -n "${deb}" ] || return 1
 		dpkg -i "${deb}" >/dev/null 2>&1 || return 1
 	fi
-	modprobe agnocast
+	modprobe hermos
 }
 
 # ------------------------------------------------------------------ T1 --
@@ -141,43 +141,43 @@ _restore_canonical() {
 @test "T6: switches from canonical to upgrade version end-to-end" {
 	run bash -c "echo y | '${SCRIPT}' '${UPGRADE_VER}'"
 	[ "${status}" -eq 0 ]
-	[[ "${output}" == *"Agnocast installed! v${UPGRADE_VER}"* ]]
+	[[ "${output}" == *"Hermos installed! v${UPGRADE_VER}"* ]]
 	[[ "${output}" == *"Done."* ]]
-	dpkg-query -W -f='${Status}' "agnocast-kmod-v${UPGRADE_VER}" | grep -q "install ok installed"
-	run dpkg-query -W -f='${Status}' "agnocast-kmod-v${CANONICAL_VER}"
+	dpkg-query -W -f='${Status}' "hermos-kmod-v${UPGRADE_VER}" | grep -q "install ok installed"
+	run dpkg-query -W -f='${Status}' "hermos-kmod-v${CANONICAL_VER}"
 	[[ "${output}" != *"install ok installed"* ]]
-	lsmod | awk '{print $1}' | grep -qx agnocast
+	lsmod | awk '{print $1}' | grep -qx hermos
 }
 
 # ------------------------------------------------------------------ T7 --
 
 @test "T7: reports holding PID via fuser when unload fails" {
-	# Hold /dev/agnocast open to bump the module refcount. The FD is inherited
+	# Hold /dev/hermos open to bump the module refcount. The FD is inherited
 	# by the child shell spawned by `run`, so modprobe -r will fail.
-	exec 7<>/dev/agnocast
+	exec 7<>/dev/hermos
 	run bash -c "echo y | '${SCRIPT}' '${UPGRADE_VER}'"
 	exec 7>&-
 
 	[ "${status}" -eq 1 ]
-	[[ "${output}" == *"failed to unload agnocast"* ]]
-	[[ "${output}" == *"Processes currently using /dev/agnocast"* ]]
+	[[ "${output}" == *"failed to unload hermos"* ]]
+	[[ "${output}" == *"Processes currently using /dev/hermos"* ]]
 	_is_canonical
 }
 
 # ------------------------------------------------------------------ T8 --
 
 @test "T8: step 3 removes orphan unversioned .ko file" {
-	modprobe -r agnocast
+	modprobe -r hermos
 	local installed
-	installed=$(dpkg-query -W -f='${Package} ${Status}\n' 'agnocast-kmod-v*' 2>/dev/null \
+	installed=$(dpkg-query -W -f='${Package} ${Status}\n' 'hermos-kmod-v*' 2>/dev/null \
 		| awk '$NF == "installed" {print $1}' || true)
 	if [ -n "${installed}" ]; then
 		# shellcheck disable=SC2086
 		apt-get purge -y ${installed} >/dev/null
 	fi
-	rm -rf /var/lib/dkms/agnocast
+	rm -rf /var/lib/dkms/hermos
 
-	local orphan="/lib/modules/$(uname -r)/updates/dkms/agnocast.ko.zst"
+	local orphan="/lib/modules/$(uname -r)/updates/dkms/hermos.ko.zst"
 	mkdir -p "$(dirname "${orphan}")"
 	touch "${orphan}"
 
@@ -189,10 +189,10 @@ _restore_canonical() {
 # ------------------------------------------------------------------ T9 --
 
 @test "T9: step 3 cleans up orphan kernel-* symlinks pointing nowhere" {
-	mkdir -p /var/lib/dkms/agnocast
-	ln -sfn /nonexistent-target-for-test /var/lib/dkms/agnocast/kernel-orphan-x86_64
+	mkdir -p /var/lib/dkms/hermos
+	ln -sfn /nonexistent-target-for-test /var/lib/dkms/hermos/kernel-orphan-x86_64
 
 	run bash -c "echo y | '${SCRIPT}' '${UPGRADE_VER}'"
 	[ "${status}" -eq 0 ]
-	[ ! -L /var/lib/dkms/agnocast/kernel-orphan-x86_64 ]
+	[ ! -L /var/lib/dkms/hermos/kernel-orphan-x86_64 ]
 }

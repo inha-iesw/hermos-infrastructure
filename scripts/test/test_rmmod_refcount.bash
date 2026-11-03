@@ -2,8 +2,8 @@
 
 set -u
 
-MODULE_NAME="agnocast"
-KMOD_DIR="$(cd "$(dirname "$0")/../../agnocast_kmod" && pwd)"
+MODULE_NAME="hermos"
+KMOD_DIR="$(cd "$(dirname "$0")/../../hermos_kmod" && pwd)"
 
 # Check sudo is cached (non-interactive)
 if ! sudo -n true 2>/dev/null; then
@@ -11,7 +11,7 @@ if ! sudo -n true 2>/dev/null; then
     exit 1
 fi
 
-echo "=== Test: rmmod should fail while /dev/agnocast is open ==="
+echo "=== Test: rmmod should fail while /dev/hermos is open ==="
 
 # Ensure module is loaded
 if ! lsmod | grep -q "^${MODULE_NAME}\b"; then
@@ -19,12 +19,12 @@ if ! lsmod | grep -q "^${MODULE_NAME}\b"; then
     sudo -n insmod "${KMOD_DIR}/${MODULE_NAME}.ko" || { echo "ABORT: failed to load module"; exit 1; }
 fi
 
-# Open /dev/agnocast and hold the fd
-exec 3< /dev/agnocast
+# Open /dev/hermos and hold the fd
+exec 3< /dev/hermos
 
 # Attempt rmmod — should fail with EBUSY
 if sudo -n rmmod "$MODULE_NAME" 2>/dev/null; then
-    echo "FAIL: rmmod succeeded while /dev/agnocast was open"
+    echo "FAIL: rmmod succeeded while /dev/hermos was open"
     # Module is now unloaded (the bug!). Reload it before exiting.
     exec 3<&-
     sudo -n insmod "${KMOD_DIR}/${MODULE_NAME}.ko" 2>/dev/null

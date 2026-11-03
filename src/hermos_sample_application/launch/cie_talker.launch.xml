@@ -1,0 +1,5 @@
+<launch>
+    <node pkg="hermos_sample_application" exec="cie_talker" name="cie_talker_node" output="screen">
+        <env name="LD_PRELOAD" value="libhermos_heaphook.so:$(env LD_PRELOAD '')" />
+    </node>
+</launch>

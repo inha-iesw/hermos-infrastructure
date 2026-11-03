@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Bring the host into the canonical state expected by switch_kmod.bats:
-# agnocast-kmod-v${CANONICAL_VER} installed and loaded. Also stashes the
+# hermos-kmod-v${CANONICAL_VER} installed and loaded. Also stashes the
 # canonical .deb under switch_kmod_fixtures/ so the bats teardown has a
 # local fallback if apt cannot fetch it later.
 #
@@ -25,11 +25,11 @@ mkdir -p "${fixtures_dir}"
 
 # Stash the canonical .deb locally; needed by teardown as a last-resort
 # recovery path when apt is unreachable.
-if ! ls "${fixtures_dir}/agnocast-kmod-v${CANONICAL_VER}"_*.deb >/dev/null 2>&1; then
-	echo "Downloading agnocast-kmod-v${CANONICAL_VER}.deb into ${fixtures_dir}"
-	(cd "${fixtures_dir}" && apt-get download "agnocast-kmod-v${CANONICAL_VER}")
+if ! ls "${fixtures_dir}/hermos-kmod-v${CANONICAL_VER}"_*.deb >/dev/null 2>&1; then
+	echo "Downloading hermos-kmod-v${CANONICAL_VER}.deb into ${fixtures_dir}"
+	(cd "${fixtures_dir}" && apt-get download "hermos-kmod-v${CANONICAL_VER}")
 fi
 
 echo y | "${switch_script}" "${CANONICAL_VER}"
 
-echo "Canonical state established: agnocast-kmod-v${CANONICAL_VER}"
+echo "Canonical state established: hermos-kmod-v${CANONICAL_VER}"

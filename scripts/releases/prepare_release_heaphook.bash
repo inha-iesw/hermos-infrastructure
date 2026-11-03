@@ -8,16 +8,16 @@ fi
 
 VERSION="2.3.5"
 
-cp -r agnocast_heaphook agnocast-heaphook-v${VERSION}-${VERSION}
-rm -f agnocast-heaphook-v${VERSION}-${VERSION}/Cargo.lock
-rm -rf agnocast-heaphook-v${VERSION}-${VERSION}/target
-tar czf agnocast-heaphook-v${VERSION}_${VERSION}.orig.tar.gz agnocast-heaphook-v${VERSION}-${VERSION}
+cp -r hermos_heaphook hermos-heaphook-v${VERSION}-${VERSION}
+rm -f hermos-heaphook-v${VERSION}-${VERSION}/Cargo.lock
+rm -rf hermos-heaphook-v${VERSION}-${VERSION}/target
+tar czf hermos-heaphook-v${VERSION}_${VERSION}.orig.tar.gz hermos-heaphook-v${VERSION}-${VERSION}
 
-cd agnocast-heaphook-v${VERSION}-${VERSION}
+cd hermos-heaphook-v${VERSION}-${VERSION}
 debuild -S -sa
 
 # When re-upload with a next release number
 # debuild -S -sd
 
 cd ..
-rm -rf agnocast-heaphook-v${VERSION}-${VERSION}
+rm -rf hermos-heaphook-v${VERSION}-${VERSION}

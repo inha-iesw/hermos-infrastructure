@@ -20,13 +20,13 @@ if ! command -v backportpackage &> /dev/null; then
 fi
 
 VERSION="2.3.5"
-RELEASE=$(dpkg-parsechangelog -l agnocast_heaphook/debian/changelog -S Version | cut -d'-' -f2)
+RELEASE=$(dpkg-parsechangelog -l hermos_heaphook/debian/changelog -S Version | cut -d'-' -f2)
 
-CHANGES_FILE="agnocast-heaphook-v${VERSION}_${VERSION}-${RELEASE}_source.changes"
-DSC_FILE="agnocast-heaphook-v${VERSION}_${VERSION}-${RELEASE}.dsc"
+CHANGES_FILE="hermos-heaphook-v${VERSION}_${VERSION}-${RELEASE}_source.changes"
+DSC_FILE="hermos-heaphook-v${VERSION}_${VERSION}-${RELEASE}.dsc"
 
 # Upload to noble
-dput ppa:t4-system-software/agnocast ${CHANGES_FILE}
+dput ppa:t4-system-software/hermos ${CHANGES_FILE}
 
 # Backport to jammy
-backportpackage -u ppa:t4-system-software/agnocast -d jammy ${DSC_FILE} -y -sa
+backportpackage -u ppa:t4-system-software/hermos -d jammy ${DSC_FILE} -y -sa

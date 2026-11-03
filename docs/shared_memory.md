@@ -3,7 +3,7 @@
 
 See official man page: <https://man7.org/linux/man-pages/man7/shm_overview.7.html>
 
-## How shared memory is used in Agnocast?
+## How shared memory is used in Hermos?
 
 ### Basic usage
 
@@ -16,10 +16,10 @@ There are three invocations for shared memory related procedures.
 
 #### Initialization of a process
 
-Each process linked with Agnocast opens a shared memory, which is writable only for the process.
-When a process first calls malloc or other memory related functions, Agnocast starts and the shared memory is opened in the following steps:
+Each process linked with Hermos opens a shared memory, which is writable only for the process.
+When a process first calls malloc or other memory related functions, Hermos starts and the shared memory is opened in the following steps:
 
-1. get an allocatable area through `AGNOCAST_ADD_PROCESS_CMD` ioctl.
+1. get an allocatable area through `HERMOS_ADD_PROCESS_CMD` ioctl.
 2. open a writable shared memory on the allocatable area, with `shm_open`, `ftruncate` and `mmap` system calls.
 3. create a thread and open a message queue so that the process can recognize a emergence of a new publisher later.
 
@@ -28,7 +28,7 @@ When a process first calls malloc or other memory related functions, Agnocast st
 When a process calls `create_publisher` for a topic `T`, the shared memory of the process should be mapped by processes which have a subscription for `T`.
 Thus the following procedures are executed:
 
-1. The publisher process gets the information about subscribers already registered for the topic `T` through `AGNOCAST_ADD_PUBLISHER_CMD` ioctl.
+1. The publisher process gets the information about subscribers already registered for the topic `T` through `HERMOS_ADD_PUBLISHER_CMD` ioctl.
 2. The publisher process opens a message queue and send the shared memory information in order to notify the subscribers already created for the topic `T` that a new publisher is registered.
 3. The subscriber process receives the message and maps the publisher's shared memory area with a read-only privilege.
 
@@ -36,13 +36,13 @@ Thus the following procedures are executed:
 
 When a process calls `create_subscription` for topic `T`, then the process maps the corresponding publisher's shared memory area with a read-only privilege in the following steps:
 
-1. get the information about the publishers for the topic `T` through `AGNOCAST_ADD_SUBSCRIBER_CMD` ioctl.
+1. get the information about the publishers for the topic `T` through `HERMOS_ADD_SUBSCRIBER_CMD` ioctl.
 2. map the publisher's shared memories with a read-only privilege.
 
 ### Naming rule and restrictions
 
-In Agnocast, there is exactly one writable process and there are some read-only processes for a shared memory.
-Suppose the writable process's id is `pid`, then the shared memory is named as "/agnocast@pid".
+In Hermos, there is exactly one writable process and there are some read-only processes for a shared memory.
+Suppose the writable process's id is `pid`, then the shared memory is named as "/hermos@pid".
 The name should start with '/' and should not include '/' any more.
 
 Message queue is also created for each process.
@@ -53,13 +53,13 @@ The restriction for the name is the same as the shared memory.
 
 In the [original paper](https://www.arxiv.org/pdf/2506.16882) and its corresponding prototype implementation ([sykwer/agnocast](https://github.com/sykwer/agnocast)), all heap allocations are redirected to shared memory.
 In contrast, in the [autowarefoundation/agnocast](https://github.com/autowarefoundation/agnocast) implementation, not all heap allocations are redirected to shared memory.
-Ideally, only objects referenced by `agnocast::ipc_shared_ptr` should be placed in shared memory, while all other allocations should reside in the process-private heap.
+Ideally, only objects referenced by `hermos::ipc_shared_ptr` should be placed in shared memory, while all other allocations should reside in the process-private heap.
 However, since it is difficult to fully achieve this in practice, the implementation is designed to approximate this ideal as closely as possible.
-Those interested may refer to the `agnocast_get_borrowed_publisher_num()` function in `agnocastlib` and `agnocast_heaphook`.
-The current approach is that heap allocations occurring between the `AgnocastPublisher::borrow_loaned_message()` call and the subsequent `AgnocastPublisher::publish()` call are redirected to shared memory.
-This is because it is not possible to determine exactly when, within this interval, a heap allocation for an object referenced by `agnocast::ipc_shared_ptr` will occur.
+Those interested may refer to the `hermos_get_borrowed_publisher_num()` function in `hermoslib` and `hermos_heaphook`.
+The current approach is that heap allocations occurring between the `HermosPublisher::borrow_loaned_message()` call and the subsequent `HermosPublisher::publish()` call are redirected to shared memory.
+This is because it is not possible to determine exactly when, within this interval, a heap allocation for an object referenced by `hermos::ipc_shared_ptr` will occur.
 
-The virtual address space resources are managed in [agnocast_kmod/agnocast_memory_allocator.h](https://github.com/autowarefoundation/agnocast/blob/main/agnocast_kmod/agnocast_memory_allocator.h), and the ranges defined in this file are arbitrarily chosen.
+The virtual address space resources are managed in [hermos_kmod/hermos_memory_allocator.h](https://github.com/autowarefoundation/agnocast/blob/main/agnocast_kmod/agnocast_memory_allocator.h), and the ranges defined in this file are arbitrarily chosen.
 
 ## Mempool size configuration
 

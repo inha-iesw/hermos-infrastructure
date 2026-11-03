@@ -1,8 +1,8 @@
 *:*/test/*
 
-uninitvar:*/agnocast_kmod/*
-nullPointer:*/agnocast_kmod/*
-unusedStructMember:*/agnocast_kmod/*
+uninitvar:*/hermos_kmod/*
+nullPointer:*/hermos_kmod/*
+unusedStructMember:*/hermos_kmod/*
 
 checkersReport
 missingInclude

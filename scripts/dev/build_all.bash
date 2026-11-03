@@ -2,11 +2,11 @@
 
 colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
 
-cd agnocast_kmod
+cd hermos_kmod
 make
 
-cd ../agnocast_heaphook
+cd ../hermos_heaphook
 cargo vendor
 cargo build --release
 cd ..
-cp agnocast_heaphook/target/release/libagnocast_heaphook.so install/agnocastlib/lib
+cp hermos_heaphook/target/release/libhermos_heaphook.so install/hermoslib/lib
