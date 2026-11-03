@@ -70,7 +70,7 @@ Each script is a thin wrapper that runs `source install/setup.bash` followed by 
 
 ### releases/ — maintainer-only
 
-Release automation for the `hermos-heaphook` and `hermos-kmod` Debian packages on `ppa:t4-system-software/hermos`. Requires `debuild`, `dput`, `backportpackage`, and `DEBEMAIL`/`DEBFULLNAME` exported.
+Inherited Debian release automation is **unconfigured** for HERMOS. Historical upstream changelog entries remain intact; add a new fork entry before preparing packages. Publication additionally requires an explicitly authorized `HERMOS_PPA` target. No HERMOS PPA is assumed or created. The scripts require `debuild`, `dput`, `backportpackage`, and `DEBEMAIL`/`DEBFULLNAME` exported.
 
 | Script | Purpose |
 |---|---|

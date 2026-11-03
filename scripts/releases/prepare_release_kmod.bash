@@ -1,6 +1,12 @@
 #!/bin/bash
 set -eux
 
+# Historical upstream release entries are retained; initialize fork release metadata first.
+if [ "$(dpkg-parsechangelog -l hermos_kmod/debian/changelog -S Source)" != "hermos-kmod-v2.3.5" ]; then
+  echo "Error: HERMOS Debian release metadata is not configured. Add a new fork changelog entry first." >&2
+  exit 1
+fi
+
 if ! command -v debuild &> /dev/null; then
   echo "Error: debuild is not installed. Install it with: sudo apt install devscripts"
   exit 1

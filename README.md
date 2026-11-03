@@ -86,7 +86,7 @@ Use the backend sources distributed with this workspace:
 cd /path/to/rclpy_zerocopy_ws/hermos
 ```
 
-Cloning upstream alone does not include the HERMOS changes.
+Cloning upstream alone does not include the HERMOS changes. The inherited Debian release scripts and historical changelogs are not a configured HERMOS publication workflow.
 
 ### Setup
 

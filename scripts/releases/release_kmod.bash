@@ -1,6 +1,13 @@
 #!/bin/bash
 set -eux
 
+# Historical upstream release entries are retained; initialize fork release metadata first.
+if [ "$(dpkg-parsechangelog -l hermos_kmod/debian/changelog -S Source)" != "hermos-kmod-v2.3.5" ]; then
+  echo "Error: HERMOS Debian release metadata is not configured. Add a new fork changelog entry first." >&2
+  exit 1
+fi
+: "${HERMOS_PPA:?Set HERMOS_PPA to the authorized fork publication target.}"
+
 # Preparation example:
 #   export DEBEMAIL="sykwer@gmail.com"
 #   export DEBFULLNAME="Takahiro Ishikawa-Aso"
@@ -32,7 +39,7 @@ if ! grep -q "dh-dkms" "${DSC_FILE}"; then
 fi
 
 # Upload to noble
-dput ppa:t4-system-software/hermos ${CHANGES_FILE}
+dput "${HERMOS_PPA}" ${CHANGES_FILE}
 
 # Backport to jammy
-backportpackage -u ppa:t4-system-software/hermos -d jammy ${DSC_FILE} -y -sa
+backportpackage -u "${HERMOS_PPA}" -d jammy ${DSC_FILE} -y -sa
