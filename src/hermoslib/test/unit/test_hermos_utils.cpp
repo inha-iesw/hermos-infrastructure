@@ -119,6 +119,26 @@ TEST(HermosUtilsTest, validate_ld_preload_only_libhermos_heaphook)
   unsetenv("LD_PRELOAD");
 }
 
+TEST(HermosUtilsTest, get_hermos_device_path_defaults_when_unset)
+{
+  unsetenv("HERMOS_DEVICE_PATH");
+  EXPECT_STREQ(hermos::get_hermos_device_path(), "/dev/hermos");
+}
+
+TEST(HermosUtilsTest, get_hermos_device_path_defaults_when_empty)
+{
+  setenv("HERMOS_DEVICE_PATH", "", 1);
+  EXPECT_STREQ(hermos::get_hermos_device_path(), "/dev/hermos");
+  unsetenv("HERMOS_DEVICE_PATH");
+}
+
+TEST(HermosUtilsTest, get_hermos_device_path_uses_env_override)
+{
+  setenv("HERMOS_DEVICE_PATH", "/dev/hermos_rclpy", 1);
+  EXPECT_STREQ(hermos::get_hermos_device_path(), "/dev/hermos_rclpy");
+  unsetenv("HERMOS_DEVICE_PATH");
+}
+
 TEST(HermosUtilsTest, validate_publisher_qos_default_no_warning)
 {
   LogCapture capture;

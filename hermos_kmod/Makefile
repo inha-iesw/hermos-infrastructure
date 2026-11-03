@@ -1,6 +1,12 @@
 VERSION := $(shell cat $(src)/version.txt 2>/dev/null || echo "unknown")
 ccflags-y += -Wall -Werror -DVERSION='"$(VERSION)"'
 
+# Module name; the character device and class names follow it (KBUILD_MODNAME).
+# Override to load this build next to another Hermos kmod, e.g.
+# `make HERMOS_MODULE_NAME=hermos_rclpy` creates /dev/hermos_rclpy, which
+# userspace selects with HERMOS_DEVICE_PATH.
+HERMOS_MODULE_NAME ?= hermos
+
 ifeq ($(KUNIT_BUILD),y)
   ifeq ($(CONFIG_KUNIT)$(CONFIG_GCOV_KERNEL),yy)
     obj-m := hermos_kunit.o
@@ -15,8 +21,8 @@ ifeq ($(KUNIT_BUILD),y)
     $(warning "CONFIG_KUNIT or CONFIG_GCOV_KERNEL is not set")
   endif
 else
-  obj-m := hermos.o
-  hermos-objs := hermos_main.o hermos_memory_allocator.o\
+  obj-m := $(HERMOS_MODULE_NAME).o
+  $(HERMOS_MODULE_NAME)-objs := hermos_main.o hermos_memory_allocator.o\
 	hermos_init.o \
 	hermos_exit.o \
 	hermos_ioctl.o \

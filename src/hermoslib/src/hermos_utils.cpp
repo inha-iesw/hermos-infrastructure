@@ -108,6 +108,15 @@ uint32_t get_ros_domain_id()
   return static_cast<uint32_t>(value);
 }
 
+const char * get_hermos_device_path()
+{
+  const char * device_path = getenv("HERMOS_DEVICE_PATH");
+  if (device_path == nullptr || *device_path == '\0') {
+    return "/dev/hermos";
+  }
+  return device_path;
+}
+
 std::string create_uds_addr_for_bridge()
 {
   // Abstract-namespace UDS address is prefixed with '\0' and its length is

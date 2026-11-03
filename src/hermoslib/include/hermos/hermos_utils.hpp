@@ -81,6 +81,12 @@ void validate_ld_preload();
 // or unparsable), matching ROS 2's default. Registered with the kmod so topics
 // in different domains are isolated.
 uint32_t get_ros_domain_id();
+// Return the Hermos character device path: HERMOS_DEVICE_PATH if set and
+// non-empty, otherwise "/dev/hermos". Lets a kmod built under another module
+// name coexist with the default one. Allocation-free (the result points into
+// the environment or a string literal), so initialize_hermos() may call it
+// before TLSF is ready.
+const char * get_hermos_device_path();
 std::string create_mq_name_for_hermos_publish(
   const std::string & topic_name, const topic_local_id_t id);
 std::string create_uds_addr_for_bridge();

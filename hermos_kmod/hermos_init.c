@@ -70,16 +70,18 @@ int hermos_init_device(void)
 {
   int ret;
 
-  major = register_chrdev(0, "hermos" /*device driver name*/, &fops);
+  // Device, class and driver names follow the module name so that a renamed build
+  // (HERMOS_MODULE_NAME in the Makefile) can be loaded next to another Hermos kmod.
+  major = register_chrdev(0, KBUILD_MODNAME /*device driver name*/, &fops);
   if (major < 0) {
     pr_err("hermos: register_chrdev failed: %d\n", major);
     return major;
   }
 
 #if KERNEL_VERSION(6, 3, 0) <= LINUX_VERSION_CODE
-  hermos_class = class_create("hermos_class");
+  hermos_class = class_create(KBUILD_MODNAME "_class");
 #else
-  hermos_class = class_create(THIS_MODULE, "hermos_class");
+  hermos_class = class_create(THIS_MODULE, KBUILD_MODNAME "_class");
 #endif
   if (IS_ERR(hermos_class)) {
     ret = PTR_ERR(hermos_class);
@@ -89,7 +91,7 @@ int hermos_init_device(void)
 
   hermos_class->devnode = hermos_devnode;
   hermos_device =
-    device_create(hermos_class, NULL, MKDEV(major, 0), NULL, "hermos" /*file name*/);
+    device_create(hermos_class, NULL, MKDEV(major, 0), NULL, KBUILD_MODNAME /*file name*/);
   if (IS_ERR(hermos_device)) {
     ret = PTR_ERR(hermos_device);
     pr_err("hermos: device_create failed: %d\n", ret);
@@ -101,7 +103,7 @@ int hermos_init_device(void)
 err_class_destroy:
   class_destroy(hermos_class);
 err_unregister_chrdev:
-  unregister_chrdev(major, "hermos");
+  unregister_chrdev(major, KBUILD_MODNAME);
   return ret;
 }
 

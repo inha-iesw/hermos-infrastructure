@@ -110,5 +110,5 @@ void hermos_exit_device(void)
 {
   device_destroy(hermos_class, MKDEV(major, 0));
   class_destroy(hermos_class);
-  unregister_chrdev(major, "hermos");
+  unregister_chrdev(major, KBUILD_MODNAME);
 }

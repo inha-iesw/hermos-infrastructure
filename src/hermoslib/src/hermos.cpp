@@ -476,12 +476,13 @@ struct initialize_hermos_result initialize_hermos(
     exit(EXIT_FAILURE);
   }
 
-  hermos_fd = open("/dev/hermos", O_RDWR);
+  const char * device_path = get_hermos_device_path();
+  hermos_fd = open(device_path, O_RDWR);
   if (hermos_fd < 0) {
     if (errno == ENOENT) {
-      RCLCPP_ERROR(logger, "%s", HERMOS_DEVICE_NOT_FOUND_MSG);
+      RCLCPP_ERROR(logger, "%s (device path: %s)", HERMOS_DEVICE_NOT_FOUND_MSG, device_path);
     } else {
-      RCLCPP_ERROR(logger, "Failed to open /dev/hermos: %s", strerror(errno));
+      RCLCPP_ERROR(logger, "Failed to open %s: %s", device_path, strerror(errno));
     }
     exit(EXIT_FAILURE);
   }
