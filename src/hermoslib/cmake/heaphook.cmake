@@ -24,3 +24,13 @@ add_dependencies(hermos_heaphook hermos)
 # its path keeps the actual library as its sibling (never Cargo's link stub).
 install(FILES "${hermos_heaphook_output}" DESTINATION lib
   PERMISSIONS OWNER_READ OWNER_WRITE GROUP_READ WORLD_READ)
+
+set(hermos_source_identity "${CMAKE_CURRENT_BINARY_DIR}/source-identity.json")
+add_custom_target(hermos_source_identity ALL
+  COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/generate_source_identity.py"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../.." "${hermos_source_identity}"
+  BYPRODUCTS "${hermos_source_identity}"
+  VERBATIM
+)
+install(FILES "${hermos_source_identity}" DESTINATION share/${PROJECT_NAME})

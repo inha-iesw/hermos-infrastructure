@@ -139,6 +139,12 @@ if(BUILD_TESTING)
   find_package(std_msgs REQUIRED)
   find_package(std_srvs REQUIRED)
 
+  add_test(NAME test_install_source_identity
+    COMMAND "${Python3_EXECUTABLE}" -m pytest -q
+      "${CMAKE_CURRENT_SOURCE_DIR}/test/installation/test_source_identity.py"
+      "--junitxml=${CMAKE_CURRENT_BINARY_DIR}/test_results/${PROJECT_NAME}/test_source_identity.xunit.xml")
+  set_tests_properties(test_install_source_identity PROPERTIES
+    TIMEOUT 30 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
   add_test(NAME test_install_heaphook
     COMMAND "${Python3_EXECUTABLE}" -m pytest -q
       "${CMAKE_CURRENT_SOURCE_DIR}/test/installation/test_heaphook_install.py"
