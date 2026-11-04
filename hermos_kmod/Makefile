@@ -6,6 +6,11 @@ ccflags-y += -Wall -Werror -DVERSION='"$(VERSION)"'
 # `make HERMOS_MODULE_NAME=hermos_rclpy` creates /dev/hermos_rclpy, which
 # userspace selects with HERMOS_DEVICE_PATH.
 HERMOS_MODULE_NAME ?= hermos
+ifeq ($(HERMOS_MODULE_NAME),hermos_rclpy)
+  ccflags-y += -DHERMOS_DEVICE_MODE=0660
+else
+  ccflags-y += -DHERMOS_DEVICE_MODE=0666
+endif
 
 ifeq ($(KUNIT_BUILD),y)
   ifeq ($(CONFIG_KUNIT)$(CONFIG_GCOV_KERNEL),yy)

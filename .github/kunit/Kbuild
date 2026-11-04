@@ -20,4 +20,5 @@ hermos_kunit-objs := \
 
 include $(src)/hermos_kunit/Makefile.inc
 
-ccflags-y += -DKUNIT_BUILD -DVERSION='"ci-kunit"'
+# The built-in KUnit device retains the legacy module's permission policy.
+ccflags-y += -DKUNIT_BUILD -DVERSION='"ci-kunit"' -DHERMOS_DEVICE_MODE=0666

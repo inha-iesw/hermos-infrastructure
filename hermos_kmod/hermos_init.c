@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0-only OR BSD-2-Clause
 #include "hermos_internal.h"
 
+#ifndef HERMOS_DEVICE_MODE
+#error "The build must define HERMOS_DEVICE_MODE"
+#endif
+MODULE_INFO(devmode, __stringify(HERMOS_DEVICE_MODE));
+
 // =========================================
 // Initialize and cleanup
 
@@ -11,7 +16,7 @@ static char * hermos_devnode(struct device * dev, umode_t * mode)
 #endif
 {
   if (mode) {
-    *mode = 0666;
+    *mode = HERMOS_DEVICE_MODE;
   }
   return NULL;
 }
