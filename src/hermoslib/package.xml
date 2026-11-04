@@ -20,6 +20,8 @@
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
+  <build_depend>cargo</build_depend>
+
   <depend>ament_index_cpp</depend>
   <depend>libgoogle-glog-dev</depend>
   <depend>liblttng-ust-dev</depend>
@@ -57,6 +59,7 @@
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
   <test_depend>launch_testing_ament_cmake</test_depend>
+  <test_depend>python3-pytest</test_depend>
   <test_depend>std_msgs</test_depend>
   <test_depend>std_srvs</test_depend>
 

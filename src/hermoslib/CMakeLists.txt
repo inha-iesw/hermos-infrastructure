@@ -119,6 +119,7 @@ install(
 )
 
 find_package(Python3 REQUIRED)
+include(cmake/heaphook.cmake)
 
 execute_process(
   COMMAND ${Python3_EXECUTABLE} -c "import xml.etree.ElementTree as ET; print(ET.parse('${CMAKE_CURRENT_SOURCE_DIR}/package.xml').getroot().find('version').text)"
@@ -137,6 +138,13 @@ if(BUILD_TESTING)
   find_package(ament_cmake_gmock REQUIRED)
   find_package(std_msgs REQUIRED)
   find_package(std_srvs REQUIRED)
+
+  add_test(NAME test_install_heaphook
+    COMMAND "${Python3_EXECUTABLE}" -m pytest -q
+      "${CMAKE_CURRENT_SOURCE_DIR}/test/installation/test_heaphook_install.py"
+      "--junitxml=${CMAKE_CURRENT_BINARY_DIR}/test_results/${PROJECT_NAME}/test_install_heaphook.xunit.xml")
+  set_tests_properties(test_install_heaphook PROPERTIES TIMEOUT 30
+    ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1;HERMOS_TEST_PREFIX=${CMAKE_INSTALL_PREFIX}")
 
   # Unit tests
   find_package(rosidl_typesupport_cpp REQUIRED)
