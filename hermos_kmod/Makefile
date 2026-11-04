@@ -29,7 +29,9 @@ else
 	hermos_internal.o
 endif
 
-KERNEL_VERSION ?= $(shell uname -r)
+KVERSION ?= $(shell uname -r)
+KERNEL_VERSION ?= $(KVERSION)
+KERNEL_BUILD_DIR ?= /lib/modules/$(KERNEL_VERSION)/build
 KERNEL_MAJOR := $(shell echo $(KERNEL_VERSION) | cut -d '.' -f 1)
 KERNEL_MINOR := $(shell echo $(KERNEL_VERSION) | cut -d '.' -f 2)
 
@@ -54,16 +56,16 @@ ifeq ($(shell expr $(KERNEL_MAJOR) \< 6 \| $(KERNEL_MAJOR) = 6 \& $(KERNEL_MINOR
 endif
 
 all:
-	make -C /lib/modules/$(shell uname -r)/build M=$(PWD) modules
+	$(MAKE) -C "$(KERNEL_BUILD_DIR)" M="$(CURDIR)" KERNEL_VERSION="$(KERNEL_VERSION)" modules
 
 test:
-	make -C /lib/modules/$(shell uname -r)/build M=$(PWD) KUNIT_BUILD=y modules
+	$(MAKE) -C "$(KERNEL_BUILD_DIR)" M="$(CURDIR)" KERNEL_VERSION="$(KERNEL_VERSION)" KUNIT_BUILD=y modules
 
 sparse:
-	make -C /lib/modules/$(shell uname -r)/build M=$(PWD) C=2 modules > sparse.log 2>&1 || { cat sparse.log; exit 1; }
+	$(MAKE) -C "$(KERNEL_BUILD_DIR)" M="$(CURDIR)" KERNEL_VERSION="$(KERNEL_VERSION)" C=2 modules > sparse.log 2>&1 || { cat sparse.log; exit 1; }
 	! grep 'hermos_kmod/.*warning' sparse.log && rm -f sparse.log
 
 clean:
-	make -C /lib/modules/$(shell uname -r)/build M=$(PWD) clean
+	$(MAKE) -C "$(KERNEL_BUILD_DIR)" M="$(CURDIR)" KERNEL_VERSION="$(KERNEL_VERSION)" clean
 
 .PHONY: all test sparse clean
