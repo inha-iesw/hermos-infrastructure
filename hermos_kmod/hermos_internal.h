@@ -260,6 +260,39 @@ const char * hermos_notify_mq_topic_name(const struct topic_wrapper * wrapper);
 
 struct process_info * hermos_find_process_info(const pid_t pid);
 
+/**
+ * @brief Find a topic wrapper in the exact namespace and domain.
+ * @param topic_name Non-null topic name; caller retains ownership.
+ * @param ipc_ns Non-null namespace identity; caller retains ownership.
+ * @param domain_id Domain to match.
+ * @return Borrowed wrapper, or NULL if absent.
+ * @pre The caller holds global_htables_rwsem.
+ */
+struct topic_wrapper * hermos_find_topic(
+  const char * topic_name, const struct ipc_namespace * ipc_ns, uint32_t domain_id);
+
+/**
+ * @brief Find a publisher in a wrapper's shared topic.
+ * @param wrapper Non-null, borrowed wrapper.
+ * @param publisher_id Topic-local publisher identity.
+ * @return Borrowed publisher, or NULL if absent.
+ * @pre The caller holds global_htables_rwsem and the topic lock.
+ */
+struct publisher_info * hermos_find_publisher_info(
+  const struct topic_wrapper * wrapper, topic_local_id_t publisher_id);
+
+/**
+ * @brief Apply the topic's directional domain bridge rule.
+ * @param topic Non-null, borrowed shared topic.
+ * @param publisher_domain Publication source domain.
+ * @param subscriber_domain Delivery destination domain.
+ * @return True for the same domain or a permitted cross-domain direction.
+ * @pre The caller holds global_htables_rwsem and the topic lock.
+ */
+bool hermos_domain_delivery_allowed(
+  const struct topic_struct * topic, uint32_t publisher_domain, uint32_t subscriber_domain);
+
+
 void hermos_free_exit_subscription_list(struct process_info * proc_info);
 
 void hermos_remove_entry_node(struct topic_wrapper * wrapper, struct entry_node * en);

@@ -35,7 +35,7 @@ static unsigned long get_topic_hash(const char * str)
   return hash_min(hash, TOPIC_HASH_BITS);
 }
 
-static struct topic_wrapper * find_topic(
+struct topic_wrapper * hermos_find_topic(
   const char * topic_name, const struct ipc_namespace * ipc_ns, uint32_t domain_id)
 {
   struct topic_wrapper * entry;
@@ -71,7 +71,7 @@ static uint32_t get_current_domain_id(void)
 static struct topic_wrapper * find_topic_for_current(
   const char * topic_name, const struct ipc_namespace * ipc_ns)
 {
-  return find_topic(topic_name, ipc_ns, get_current_domain_id());
+  return hermos_find_topic(topic_name, ipc_ns, get_current_domain_id());
 }
 
 static struct domain_bridge_rule * find_domain_rule(
@@ -99,14 +99,14 @@ static struct topic_struct * find_grouped_topic_struct(
     return NULL;
   }
 
-  struct topic_wrapper * partner = find_topic(partner_name, ipc_ns, partner_domain);
+  struct topic_wrapper * partner = hermos_find_topic(partner_name, ipc_ns, partner_domain);
   return partner ? partner->topic : NULL;
 }
 
 // Whether a publication in pub_domain may be delivered to a subscriber in
 // sub_domain within this topic_struct. Same domain is always allowed; crossing
 // domains requires a rule permitting that direction (from_domain -> to_domain).
-static bool domain_delivery_allowed(
+bool hermos_domain_delivery_allowed(
   const struct topic_struct * topic, uint32_t pub_domain, uint32_t sub_domain)
 {
   if (pub_domain == sub_domain) return true;
@@ -122,7 +122,7 @@ static int add_topic(
   const char * topic_name, const struct ipc_namespace * ipc_ns, uint32_t domain_id,
   struct topic_wrapper ** wrapper)
 {
-  *wrapper = find_topic(topic_name, ipc_ns, domain_id);
+  *wrapper = hermos_find_topic(topic_name, ipc_ns, domain_id);
   if (*wrapper) {
     return 0;
   }
@@ -293,7 +293,7 @@ static int insert_subscriber_info(
   return 0;
 }
 
-static struct publisher_info * find_publisher_info(
+struct publisher_info * hermos_find_publisher_info(
   const struct topic_wrapper * wrapper, const topic_local_id_t publisher_id)
 {
   struct publisher_info * info;
@@ -560,7 +560,7 @@ static int set_publisher_shm_info(
 
     // A subscriber only reads from publishers that deliver to it; a one-way
     // bridge rule can exclude opposite-domain publishers, so skip mapping them.
-    if (!domain_delivery_allowed(wrapper->topic, pub_info->domain_id, wrapper->domain_id)) {
+    if (!hermos_domain_delivery_allowed(wrapper->topic, pub_info->domain_id, wrapper->domain_id)) {
       continue;
     }
 
@@ -893,7 +893,7 @@ int hermos_ioctl_publish_msg(
 
   down_write(&wrapper->topic->rwsem);
 
-  struct publisher_info * pub_info = find_publisher_info(wrapper, publisher_id);
+  struct publisher_info * pub_info = hermos_find_publisher_info(wrapper, publisher_id);
   if (!pub_info) {
     dev_warn(
       hermos_device, "Publisher (id=%d) not found in the topic (topic_name=%s). (%s)\n",
@@ -933,7 +933,7 @@ int hermos_ioctl_publish_msg(
   hash_for_each(wrapper->topic->sub_info_htable, bkt_sub_info, sub_info, node)
   {
     if (sub_info->is_take_sub) continue;
-    if (!domain_delivery_allowed(wrapper->topic, pub_info->domain_id, sub_info->domain_id))
+    if (!hermos_domain_delivery_allowed(wrapper->topic, pub_info->domain_id, sub_info->domain_id))
       continue;
     if (sub_info->ignore_local_publications && (sub_info->pid == pub_info->pid)) {
       continue;
@@ -1000,7 +1000,7 @@ static int receive_msg_core(
       break;
     }
 
-    const struct publisher_info * pub_info = find_publisher_info(wrapper, en->publisher_id);
+    const struct publisher_info * pub_info = hermos_find_publisher_info(wrapper, en->publisher_id);
     if (!pub_info) {
       dev_warn(
         hermos_device,
@@ -1019,7 +1019,7 @@ static int receive_msg_core(
       continue;
     }
 
-    if (!domain_delivery_allowed(wrapper->topic, pub_info->domain_id, sub_info->domain_id)) {
+    if (!hermos_domain_delivery_allowed(wrapper->topic, pub_info->domain_id, sub_info->domain_id)) {
       continue;
     }
 
@@ -1144,7 +1144,7 @@ int hermos_ioctl_take_msg(
       break;  // Never take any messages that are older than the most recently received
     }
 
-    const struct publisher_info * pub_info = find_publisher_info(wrapper, en->publisher_id);
+    const struct publisher_info * pub_info = hermos_find_publisher_info(wrapper, en->publisher_id);
     if (!pub_info) {
       dev_warn(
         hermos_device,
@@ -1164,7 +1164,7 @@ int hermos_ioctl_take_msg(
       continue;
     }
 
-    if (!domain_delivery_allowed(wrapper->topic, pub_info->domain_id, sub_info->domain_id)) {
+    if (!hermos_domain_delivery_allowed(wrapper->topic, pub_info->domain_id, sub_info->domain_id)) {
       continue;
     }
 
@@ -1690,7 +1690,7 @@ int hermos_ioctl_get_topic_subscriber_info(
 
   down_read(&global_htables_rwsem);
 
-  struct topic_wrapper * wrapper = find_topic(topic_name, ipc_ns, topic_info_args->domain_id);
+  struct topic_wrapper * wrapper = hermos_find_topic(topic_name, ipc_ns, topic_info_args->domain_id);
   if (!wrapper) {
     up_read(&global_htables_rwsem);
     return 0;
@@ -1780,7 +1780,7 @@ int hermos_ioctl_get_topic_publisher_info(
 
   down_read(&global_htables_rwsem);
 
-  struct topic_wrapper * wrapper = find_topic(topic_name, ipc_ns, topic_info_args->domain_id);
+  struct topic_wrapper * wrapper = hermos_find_topic(topic_name, ipc_ns, topic_info_args->domain_id);
   if (!wrapper) {
     up_read(&global_htables_rwsem);
     return 0;
@@ -1917,7 +1917,7 @@ int hermos_ioctl_get_publisher_qos(
 
   down_read(&wrapper->topic->rwsem);
 
-  const struct publisher_info * pub_info = find_publisher_info(wrapper, publisher_id);
+  const struct publisher_info * pub_info = hermos_find_publisher_info(wrapper, publisher_id);
   if (!pub_info) {
     dev_dbg(
       hermos_device,
@@ -2034,7 +2034,7 @@ int hermos_ioctl_remove_publisher(
     goto unlock;
   }
 
-  struct publisher_info * pub_info = find_publisher_info(wrapper, publisher_id);
+  struct publisher_info * pub_info = hermos_find_publisher_info(wrapper, publisher_id);
   if (!pub_info) {
     ret = -ENODATA;
     goto unlock;
@@ -2211,7 +2211,7 @@ int hermos_ioctl_add_domain_bridge(
   // Store the pair canonically (domain_a < domain_b), each domain keeping its own name
   // (they differ on rename). Direction lives only in the a_to_b / b_to_a flags; grouping
   // (find_grouped_topic_struct) pairs the two cells and delivery direction is enforced by
-  // domain_delivery_allowed.
+  // hermos_domain_delivery_allowed.
   const bool from_is_a = from_domain < to_domain;
   const uint32_t domain_a = from_is_a ? from_domain : to_domain;
   const uint32_t domain_b = from_is_a ? to_domain : from_domain;
@@ -2240,7 +2240,7 @@ int hermos_ioctl_add_domain_bridge(
 
   // Grouping merges the two domains' id and entry_id spaces, which is only safe
   // before either side has allocated any; reject if an endpoint already joined.
-  if (find_topic(name_a, ipc_ns, domain_a) || find_topic(name_b, ipc_ns, domain_b)) {
+  if (hermos_find_topic(name_a, ipc_ns, domain_a) || hermos_find_topic(name_b, ipc_ns, domain_b)) {
     ret = -EBUSY;
     goto unlock;
   }
@@ -3537,7 +3537,7 @@ bool hermos_is_in_publisher_htable(
   if (!wrapper) {
     return false;
   }
-  const struct publisher_info * pub_info = find_publisher_info(wrapper, publisher_id);
+  const struct publisher_info * pub_info = hermos_find_publisher_info(wrapper, publisher_id);
   if (!pub_info) {
     return false;
   }
@@ -3599,7 +3599,7 @@ int hermos_topic_wrapper_refcnt(
   const char * topic_name, const struct ipc_namespace * ipc_ns, uint32_t domain_id)
 {
   down_read(&global_htables_rwsem);
-  const struct topic_wrapper * wrapper = find_topic(topic_name, ipc_ns, domain_id);
+  const struct topic_wrapper * wrapper = hermos_find_topic(topic_name, ipc_ns, domain_id);
   int refcnt = wrapper ? (int)wrapper->topic->wrapper_refcnt : 0;
   up_read(&global_htables_rwsem);
   return refcnt;
