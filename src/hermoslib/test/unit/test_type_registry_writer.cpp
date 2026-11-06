@@ -82,7 +82,19 @@ TEST_F(TypeRegistryWriterTest, RegisterTypeWritesExpectedLine)
   EXPECT_EQ(path.substr(0, base_dir_.size()), base_dir_);
 
   const std::string body = read_file(path);
-  EXPECT_NE(body.find("/chatter\tstd_msgs/msg/Int32\tpub\t/talker_node\n"), std::string::npos);
+  EXPECT_NE(body.find("/chatter\tstd_msgs/msg/Int32\tpub\t/talker_node\t"), std::string::npos);
+  std::istringstream fields(body);
+  std::string value;
+  for (int index = 0; index < 4; ++index) ASSERT_TRUE(std::getline(fields, value, '\t'));
+  ASSERT_TRUE(std::getline(fields, value, '\t'));
+  EXPECT_EQ(std::stoul(value), hermos::get_ros_domain_id());
+  ASSERT_TRUE(std::getline(fields, value));
+  EXPECT_GT(std::stoull(value), 0U);
+  const std::string process = read_file("/proc/self/stat");
+  std::istringstream identity(process.substr(process.rfind(')') + 2));
+  std::string start;
+  for (int field = 3; field <= 22; ++field) ASSERT_TRUE(identity >> start);
+  EXPECT_EQ(value, start);
 }
 
 TEST_F(TypeRegistryWriterTest, RegisterTypeAppendsAdditionalLines)
@@ -93,8 +105,8 @@ TEST_F(TypeRegistryWriterTest, RegisterTypeAppendsAdditionalLines)
 
   const std::string body = read_file(writer.current_path_for_test());
   // Both lines should be present (order matches call order).
-  const auto pos_a = body.find("/topic_a\tstd_msgs/msg/Int32\tpub\t/node_a\n");
-  const auto pos_b = body.find("/topic_b\tstd_msgs/msg/String\tsub\t/node_b\n");
+  const auto pos_a = body.find("/topic_a\tstd_msgs/msg/Int32\tpub\t/node_a\t");
+  const auto pos_b = body.find("/topic_b\tstd_msgs/msg/String\tsub\t/node_b\t");
   ASSERT_NE(pos_a, std::string::npos);
   ASSERT_NE(pos_b, std::string::npos);
   EXPECT_LT(pos_a, pos_b);
@@ -120,7 +132,7 @@ TEST_F(TypeRegistryWriterTest, ConcurrentRegisterTypeDoesNotInterleaveLines)
     th.join();
   }
 
-  // Every line should have exactly 3 tabs (4 fields) and end in `\n`.
+  // Every line carries domain and process-start identity without interleaving.
   const std::string body = read_file(writer.current_path_for_test());
   std::stringstream ss(body);
   std::string line;
@@ -130,7 +142,7 @@ TEST_F(TypeRegistryWriterTest, ConcurrentRegisterTypeDoesNotInterleaveLines)
     for (char c : line) {
       if (c == '\t') ++tabs;
     }
-    EXPECT_EQ(tabs, 3) << "garbled line: " << line;
+    EXPECT_EQ(tabs, 5) << "garbled line: " << line;
     ++count;
   }
   // Every register_type call must produce exactly one line.

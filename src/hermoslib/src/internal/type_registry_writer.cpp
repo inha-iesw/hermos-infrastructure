@@ -15,6 +15,8 @@
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
+#include <sstream>
 #include <string>
 
 namespace hermos::internal
@@ -52,6 +54,21 @@ bool ensure_dir(const std::string & path, mode_t mode)
     return false;
   }
   return S_ISDIR(st.st_mode);
+}
+
+std::string process_start_ticks()
+{
+  std::ifstream input("/proc/self/stat");
+  std::string line;
+  if (!std::getline(input, line)) return "0";
+  const auto command_end = line.rfind(')');
+  if (command_end == std::string::npos) return "0";
+  std::istringstream fields(line.substr(command_end + 1));
+  std::string field;
+  for (int number = 3; number <= 22; ++number) {
+    if (!(fields >> field)) return "0";
+  }
+  return field;
 }
 }  // namespace
 
@@ -126,6 +143,10 @@ void TypeRegistryWriter::ensure_open_locked()
     open_failed_warned_ = true;
     return;
   }
+  // Kernel process registration fixes its domain for its lifetime. Keep the
+  // writer's identity stable too; a zero start identity permits type hints only,
+  // never verified PID attribution.
+  identity_suffix_ = "\t" + std::to_string(get_ros_domain_id()) + "\t" + process_start_ticks();
 
   // Register a one-shot atexit handler the first time we open the file
   // successfully. SIGKILL bypasses this; the daemon's `/proc/<pid>` sweep
@@ -147,11 +168,12 @@ void TypeRegistryWriter::register_type(
   }
 
   std::string line;
-  line.reserve(topic_name.size() + type_name.size() + role.size() + node_name.size() + 4);
+  line.reserve(topic_name.size() + type_name.size() + role.size() + node_name.size() +
+               identity_suffix_.size() + 4);
   line.append(topic_name).push_back('\t');
   line.append(type_name).push_back('\t');
   line.append(role).push_back('\t');
-  line.append(node_name).push_back('\n');
+  line.append(node_name).append(identity_suffix_).push_back('\n');
 
   // One file per process plus the mutex above keeps writers from interleaving.
   // We loop to drain short writes and retry on EINTR. A partial line is only
@@ -185,6 +207,7 @@ void TypeRegistryWriter::reset_for_test()
     fd_ = -1;
   }
   path_.clear();
+  identity_suffix_.clear();
   open_failed_warned_ = false;
 }
 

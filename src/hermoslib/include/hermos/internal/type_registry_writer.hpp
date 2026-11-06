@@ -8,14 +8,15 @@
 //
 // Each line is tab-separated and `\n`-terminated:
 //
-//   <topic_name>\t<type_name>\t<role>\t<node_name>\n
+//   <topic_name>\t<type_name>\t<role>\t<node_name>\t<domain_id>\t<start_ticks>\n
 //
 // `role` is `"pub"` or `"sub"`. The daemon scans the directory once per
-// tick and joins the discovered `(topic, role, node_name)` triples with
-// the kmod's per-IPC-NS endpoint list (which lacks both type and pid) to
+// tick and joins the discovered `(pid, domain, topic, role, node_name)` identity with
+// the kmod's per-IPC-NS endpoint list to
 // populate `HermosTopic.type_name` and `HermosEndpoint.pid` on the
 // gossip publication. The pid lives in the filename; everything else
-// lives in the line content.
+// lives in the line content. start_ticks is /proc/<pid>/stat field 22 and rejects
+// lines left behind by an earlier process that used the same numeric PID.
 //
 // The writer is a per-process singleton. The first `register_type` call
 // lazily creates the namespace directory and opens the per-pid file in
@@ -39,7 +40,7 @@ class TypeRegistryWriter
 public:
   static TypeRegistryWriter & instance();
 
-  // Append one `<topic>\t<type>\t<role>\t<node_name>\n` line to the
+  // Append one identity-stamped type line to the
   // per-pid file. `role` must be either `"pub"` or `"sub"`. Idempotent
   // from the caller's view: the daemon dedupes identical triples on
   // ingest. Errors are logged once and then silently swallowed so a
@@ -71,6 +72,7 @@ private:
   int fd_ = -1;
   bool open_failed_warned_ = false;
   std::string path_;  // populated on first successful open
+  std::string identity_suffix_;  // domain and process start, fixed when the writer opens
 };
 
 }  // namespace hermos::internal
