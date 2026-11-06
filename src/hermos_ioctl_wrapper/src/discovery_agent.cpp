@@ -1,4 +1,5 @@
 #include "hermos_ioctl.hpp"
+#include "device/path.hpp"
 
 #include <fcntl.h>
 #include <sys/ioctl.h>
@@ -7,23 +8,6 @@
 #include <cerrno>
 #include <cstdint>
 #include <cstdio>
-
-namespace
-{
-// Open /dev/hermos for the discovery-agent ioctls, or return -1 after printing why.
-int open_hermos_device()
-{
-  int fd = open("/dev/hermos", O_RDONLY);
-  if (fd < 0) {
-    if (errno == ENOENT) {
-      fprintf(stderr, "%s", HERMOS_DEVICE_NOT_FOUND_MSG);
-    } else {
-      perror("Failed to open /dev/hermos");
-    }
-  }
-  return fd;
-}
-}  // namespace
 
 extern "C" {
 

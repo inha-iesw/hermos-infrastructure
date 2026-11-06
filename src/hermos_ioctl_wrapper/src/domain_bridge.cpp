@@ -1,4 +1,5 @@
 #include "hermos_ioctl.hpp"
+#include "device/path.hpp"
 
 #include <fcntl.h>
 #include <sys/ioctl.h>
@@ -25,13 +26,8 @@ int add_hermos_domain_bridge_rule(
     return -1;
   }
 
-  int fd = open("/dev/hermos", O_RDONLY);
+  int fd = open_hermos_device();
   if (fd < 0) {
-    if (errno == ENOENT) {
-      fprintf(stderr, "%s", HERMOS_DEVICE_NOT_FOUND_MSG);
-    } else {
-      perror("Failed to open /dev/hermos");
-    }
     return -1;
   }
 

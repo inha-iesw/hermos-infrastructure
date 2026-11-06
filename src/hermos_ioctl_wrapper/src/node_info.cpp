@@ -1,4 +1,5 @@
 #include "hermos_ioctl.hpp"
+#include "device/path.hpp"
 
 #include <fcntl.h>
 #include <sys/ioctl.h>
@@ -14,13 +15,8 @@ char ** get_hermos_sub_topics(const char * node_name, int * topic_count)
 {
   *topic_count = 0;
 
-  int fd = open("/dev/hermos", O_RDONLY);
+  int fd = open_hermos_device();
   if (fd < 0) {
-    if (errno == ENOENT) {
-      fprintf(stderr, "%s", HERMOS_DEVICE_NOT_FOUND_MSG);
-    } else {
-      perror("Failed to open /dev/hermos");
-    }
     return nullptr;
   }
 
@@ -85,13 +81,8 @@ char ** get_hermos_pub_topics(const char * node_name, int * topic_count)
 {
   *topic_count = 0;
 
-  int fd = open("/dev/hermos", O_RDONLY);
+  int fd = open_hermos_device();
   if (fd < 0) {
-    if (errno == ENOENT) {
-      fprintf(stderr, "%s", HERMOS_DEVICE_NOT_FOUND_MSG);
-    } else {
-      perror("Failed to open /dev/hermos");
-    }
     return nullptr;
   }
 

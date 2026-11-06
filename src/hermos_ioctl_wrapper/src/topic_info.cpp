@@ -1,4 +1,5 @@
 #include "hermos_ioctl.hpp"
+#include "device/path.hpp"
 
 #include <fcntl.h>
 #include <sys/ioctl.h>
@@ -16,13 +17,8 @@ struct topic_info_ret * get_hermos_sub_nodes(
 {
   *topic_info_ret_count = 0;
 
-  int fd = open("/dev/hermos", O_RDONLY);
+  int fd = open_hermos_device();
   if (fd < 0) {
-    if (errno == ENOENT) {
-      fprintf(stderr, "%s", HERMOS_DEVICE_NOT_FOUND_MSG);
-    } else {
-      perror("Failed to open /dev/hermos");
-    }
     return nullptr;
   }
 
@@ -64,13 +60,8 @@ struct topic_info_ret * get_hermos_pub_nodes(
 {
   *topic_info_ret_count = 0;
 
-  int fd = open("/dev/hermos", O_RDONLY);
+  int fd = open_hermos_device();
   if (fd < 0) {
-    if (errno == ENOENT) {
-      fprintf(stderr, "%s", HERMOS_DEVICE_NOT_FOUND_MSG);
-    } else {
-      perror("Failed to open /dev/hermos");
-    }
     return nullptr;
   }
 

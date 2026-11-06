@@ -14,11 +14,6 @@
 #define TOPIC_NAME_BUFFER_SIZE 256
 #define NODE_NAME_BUFFER_SIZE 256
 
-constexpr const char * HERMOS_DEVICE_NOT_FOUND_MSG =
-  "Failed to open /dev/hermos: Device not found. "
-  "Please ensure the hermos kernel module is installed. "
-  "Run 'sudo modprobe hermos' or 'sudo insmod <path-to-hermos.ko>' to load the module.\n";
-
 struct name_info
 {
   const char * ptr;

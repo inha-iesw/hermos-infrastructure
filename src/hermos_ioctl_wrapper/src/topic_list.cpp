@@ -1,4 +1,5 @@
 #include "hermos_ioctl.hpp"
+#include "device/path.hpp"
 
 #include <fcntl.h>
 #include <sys/ioctl.h>
@@ -19,6 +20,7 @@ extern "C" {
 // wrapper) for simplicity, so the caller never sizes them and frees the domain buffer with
 // free_hermos_topic_domains.
 // Pass nullptr as domain_ids_out when you don't need the buffer to be allocated.
+// Errors return nullptr with *topic_count == -errno; an empty graph returns count zero.
 char ** get_hermos_topics(int * topic_count, uint32_t ** domain_ids_out)
 {
   *topic_count = 0;
@@ -26,13 +28,9 @@ char ** get_hermos_topics(int * topic_count, uint32_t ** domain_ids_out)
     *domain_ids_out = nullptr;
   }
 
-  int fd = open("/dev/hermos", O_RDONLY);
+  int fd = open_hermos_device();
   if (fd < 0) {
-    if (errno == ENOENT) {
-      fprintf(stderr, "%s", HERMOS_DEVICE_NOT_FOUND_MSG);
-    } else {
-      perror("Failed to open /dev/hermos");
-    }
+    *topic_count = -errno;
     return nullptr;
   }
 
@@ -40,6 +38,7 @@ char ** get_hermos_topics(int * topic_count, uint32_t ** domain_ids_out)
     static_cast<char *>(malloc(MAX_TOPIC_NUM * TOPIC_NAME_BUFFER_SIZE));
 
   if (hermos_topic_buffer == nullptr) {
+    *topic_count = -ENOMEM;
     close(fd);
     return nullptr;
   }
@@ -48,6 +47,7 @@ char ** get_hermos_topics(int * topic_count, uint32_t ** domain_ids_out)
   if (domain_ids_out != nullptr) {
     domain_buffer = static_cast<uint32_t *>(malloc(MAX_TOPIC_NUM * sizeof(uint32_t)));
     if (domain_buffer == nullptr) {
+      *topic_count = -ENOMEM;
       free(hermos_topic_buffer);
       close(fd);
       return nullptr;
@@ -59,6 +59,7 @@ char ** get_hermos_topics(int * topic_count, uint32_t ** domain_ids_out)
   topic_list_args.domain_id_buffer_addr = reinterpret_cast<uint64_t>(domain_buffer);
   topic_list_args.topic_name_buffer_size = MAX_TOPIC_NUM;
   if (ioctl(fd, HERMOS_GET_TOPIC_LIST_CMD, &topic_list_args) < 0) {
+    *topic_count = -errno;
     perror("HERMOS_GET_TOPIC_LIST_CMD failed");
     free(domain_buffer);
     free(hermos_topic_buffer);
@@ -77,7 +78,7 @@ char ** get_hermos_topics(int * topic_count, uint32_t ** domain_ids_out)
 
   char ** topic_array = static_cast<char **>(malloc(*topic_count * sizeof(char *)));
   if (topic_array == nullptr) {
-    *topic_count = 0;
+    *topic_count = -ENOMEM;
     free(domain_buffer);
     free(hermos_topic_buffer);
     close(fd);
@@ -93,7 +94,7 @@ char ** get_hermos_topics(int * topic_count, uint32_t ** domain_ids_out)
       }
       free(topic_array);
       topic_array = nullptr;
-      *topic_count = 0;
+      *topic_count = -ENOMEM;
       free(domain_buffer);
       domain_buffer = nullptr;
       break;
