@@ -2,10 +2,35 @@
 
 Currently, Hermos supports the following `ros2` commands:
 
-- `ros2 topic list`
-- `ros2 topic info /topic_name`
-- `ros2 node list`
-- `ros2 node info /node_name`
+- `ros2 topic list_hermos`
+- `ros2 topic info_hermos /topic_name`
+- `ros2 topic stats_hermos /topic_name`
+- `ros2 topic hz_hermos /topic_name`
+- `ros2 node list_hermos`
+- `ros2 node info_hermos /node_name`
+
+### Observation scope
+
+The list, info, and stats commands collect metadata from `/_hermos_discovery_v2` in the current ROS domain. Native rows retain their source identity: host boot UUID, IPC namespace inode, ROS domain, character device identity (`major:minor`), and agent session. List commands append `[host=... ipc=... domain=... device=... session=...]`; info and stats commands print a `HERM0S host=...` header. The UUIDs, PIDs, and inode below are illustrative.
+
+These commands accept `--gossip-timeout SEC` (default: 2 seconds) and the following selectors:
+
+| Option | Effect |
+| :--- | :--- |
+| `--local` | Read native metadata from the current IPC namespace without subscribing to discovery metadata. DDS graph queries can still occur. |
+| `--session-id ID` | Select one agent/supervisor session. |
+| `--ipc-namespace INODE` | Select one IPC namespace. |
+| `--host-id UUID` | Select one host boot UUID. |
+| `--device-id MAJOR:MINOR` | Select one device on that host. |
+
+Use `ROS_DOMAIN_ID` to choose the domain. Within one host/namespace/domain/device, default commands prefer the bridge agent's snapshot, falling back to the latest observer if no bridge writer is available. Multiple writers in that route produce one default view; `--session-id` explicitly selects an observer or another live session. When different hosts, namespaces, or devices contain the same topic or node name, info commands still require selectors, and list/stats keep those routes separate. A local ioctl fallback may report `session=unknown`, because it has no agent session identity. A local-only query fails if native metadata is unavailable.
+
+`ros2 hermos discovery-daemon-status` checks the registered bridge discovery agent, not observation-only writers. A healthy observer therefore cannot mask a bridge agent that stopped publishing. Its gossip check requires the local host boot UUID, IPC namespace, ROS domain, selected device, and bridge writer role. If local host or device identity is unavailable, it reports that publication could not be verified rather than declaring the agent silent.
+
+```bash
+ros2 topic info_hermos /my_topic --host-id boot-uuid --ipc-namespace 4026531839 --session-id agent-uuid
+ros2 topic stats_hermos /my_topic --local
+```
 
 ### Topic List
 
@@ -262,3 +287,32 @@ PIDs: 86052
 Similar to `ros2 topic list_hermos`, the (Hermos enabled, bridged) suffix in the node info indicates that communication has been successfully established between Hermos and ROS 2 for that specific topic.
 
 If a topic is Hermos-enabled but not currently bridged (e.g., there is no corresponding ROS 2 publisher/subscriber or the bridge process is not active), it will be displayed simply as (Hermos enabled). This allows you to verify the connectivity status of each topic directly from the node's perspective.
+
+For a topic present in both native metadata and the node's DDS graph, the `DDS=...; HERM0S=...` fields preserve both type labels. Native PID values are shown as `unknown` when unavailable; native publisher reliability is also explicitly unknown rather than inferred from DDS QoS.
+
+DDS type labels come from the queried node's graph. A matching topic on another
+node is not used to fill in a missing native type.
+
+### Native Topic Statistics
+
+`ros2 topic stats_hermos /my_topic` reports cumulative native counters grouped by source scope, without subscribing to the payload topic or starting a bridge. Use `--local` to query the current namespace directly, or the scope selectors above to inspect a particular metadata source.
+
+The output includes the snapshot wall-clock timestamp and each available endpoint's monotonic sample timestamp. These source timestamps are not a shared clock across machines. Unsupported statistics and individual fields are shown as `unsupported`, not as zero.
+
+| Field | Native meaning |
+| :--- | :--- |
+| `published_total` | Publisher's cumulative publish count. |
+| `received_total` | Subscriber's kernel reference acquisitions, not completed callbacks. |
+| `dropped_history_total` | Unread samples lost from publisher history. |
+| `queued_entries` | Unread resident entries before subscriber QoS filtering. |
+| `retained_entries` | Publisher resident entries, or subscriber-held kernel references. |
+
+### DDS Reception Frequency
+
+`ros2 topic hz_hermos /my_topic` measures reception through DDS. It may create a dummy subscriber to trigger the bridge before running the standard ROS 2 frequency command, and prints this notice on stdout:
+
+```text
+Measuring DDS bridge reception frequency. Native counters: ros2 topic stats_hermos.
+```
+
+Use `stats_hermos` for native counters. The `hz_hermos` result includes bridge and DDS effects and is not a native publish-rate measurement.

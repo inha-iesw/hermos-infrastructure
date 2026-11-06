@@ -35,6 +35,7 @@ setup(
             'list_hermos = ros2hermos.verb.topic_list_hermos:ListHermosVerb',
             'info_hermos = ros2hermos.verb.topic_info_hermos:TopicInfoHermosVerb',
             'hz_hermos = ros2hermos.verb.topic_hz_hermos:TopicHzHermosVerb',
+            'stats_hermos = ros2hermos.observation.stats:StatsHermosVerb',
             'echo_hermos = ros2hermos.verb.topic_echo_hermos:TopicEchoHermosVerb',
             'delay_hermos = ros2hermos.verb.topic_delay_hermos:TopicDelayHermosVerb',
         ],
