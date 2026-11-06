@@ -7,7 +7,7 @@ cd "${workspace_dir}"
 source "/opt/ros/${ROS_DISTRO:-humble}/setup.bash"
 
 verify_dir="${workspace_dir}/build/verify"
-mkdir -p "${verify_dir}/kmod"
+mkdir -p "${verify_dir}/kmod/observation"
 export CMAKE_BUILD_PARALLEL_LEVEL=2
 export MAKEFLAGS="${MAKEFLAGS:--j2}"
 export ROS_LOG_DIR="${workspace_dir}/log/verify/ros"
@@ -30,6 +30,7 @@ export CARGO_TARGET_DIR="${verify_dir}/cie-rust"
 
 # Compile both module names in an isolated directory; never load either module.
 cp hermos_kmod/*.[ch] hermos_kmod/Makefile hermos_kmod/version.txt "${verify_dir}/kmod/"
+cp hermos_kmod/observation/*.[ch] "${verify_dir}/kmod/observation/"
 make -C "/lib/modules/$(uname -r)/build" M="${verify_dir}/kmod" CC="${CC:-gcc}" modules
 make -C "/lib/modules/$(uname -r)/build" M="${verify_dir}/kmod" \
   CC="${CC:-gcc}" HERMOS_MODULE_NAME=hermos_verify modules
@@ -42,7 +43,7 @@ source install/verify/local_setup.bash
 # E2E launch tests are not all labelled, so select only packages with local tests.
 colcon --log-base log/verify test --base-paths src \
   --build-base build/verify/ros --install-base install/verify \
-  --packages-select hermoslib hermos_cie_thread_configurator \
+  --packages-select hermoslib hermos_cie_thread_configurator hermos_ioctl_wrapper \
   --executor sequential --event-handlers console_direct+ \
   --return-code-on-test-failure \
   --ctest-args -LE 'requires_kernel_module|requires_heaphook' --output-on-failure

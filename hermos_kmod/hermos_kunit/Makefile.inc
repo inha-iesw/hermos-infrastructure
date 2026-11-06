@@ -1,4 +1,5 @@
 KUNIT_TEST_OBJS := \
+  observation/test_endpoint_stats.o \
   hermos_kunit_add_process.o \
   hermos_kunit_add_subscriber.o \
   hermos_kunit_add_publisher.o \

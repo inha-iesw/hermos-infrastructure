@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only OR BSD-2-Clause
 #include "hermos_internal.h"
+#include "observation/endpoint_stats.h"
 
 #ifndef KUNIT_BUILD
 // Kernel module uses global PIDs, whereas user-space and the interface between them use local PIDs.
@@ -259,6 +260,8 @@ static int insert_subscriber_info(
   (*new_info)->node_name = node_name_copy;
   (*new_info)->is_take_sub = is_take_sub;
   (*new_info)->ignore_local_publications = ignore_local_publications;
+  (*new_info)->received_total = 0;
+  (*new_info)->dropped_history_total = 0;
   (*new_info)->need_mmap_update = true;
   (*new_info)->is_bridge = is_bridge;
   INIT_HLIST_NODE(&(*new_info)->node);
@@ -355,6 +358,8 @@ static int insert_publisher_info(
   (*new_info)->qos_depth = qos_depth;
   (*new_info)->qos_is_transient_local = qos_is_transient_local;
   (*new_info)->entries_num = 0;
+  (*new_info)->published_total = 0;
+  (*new_info)->is_removed = false;
   (*new_info)->is_bridge = is_bridge;
   INIT_HLIST_NODE(&(*new_info)->node);
   uint32_t hash_val = hash_min(new_id, PUB_INFO_HASH_BITS);
@@ -532,6 +537,7 @@ static int insert_message_entry(
   rb_insert_color(&new_node->node, root);
 
   pub_info->entries_num++;
+  pub_info->published_total++;
 
   dev_dbg(
     hermos_device,
@@ -851,6 +857,7 @@ static int release_msgs_to_meet_depth(
     ioctl_ret->ret_released_addrs[ioctl_ret->ret_released_num] = en->msg_virtual_address;
     ioctl_ret->ret_released_num++;
 
+    hermos_observe_history_drop(wrapper, pub_info, en);
     rb_erase(&en->node, &wrapper->topic->entries);
     kfree(en);
 
@@ -1028,6 +1035,7 @@ static int receive_msg_core(
       return ret;
     }
 
+    sub_info->received_total++;
     ioctl_ret->ret_entry_ids[ioctl_ret->ret_entry_num] = en->entry_id;
     ioctl_ret->ret_entry_addrs[ioctl_ret->ret_entry_num] = en->msg_virtual_address;
     ioctl_ret->ret_entry_num++;
@@ -1185,6 +1193,7 @@ int hermos_ioctl_take_msg(
       if (ret < 0) {
         goto unlock_all;
       }
+      sub_info->received_total++;
     }
 
     ioctl_ret->ret_addr = candidate_en->msg_virtual_address;
@@ -2042,6 +2051,7 @@ int hermos_ioctl_remove_publisher(
 
   // Publisher-side handles do not participate in reference counting, so we don't need
   // to remove publisher references. Just clean up entries that have no subscriber references.
+  pub_info->is_removed = true;
   struct rb_root * root = &wrapper->topic->entries;
   struct rb_node * node = rb_first(root);
   struct rb_node * next_node;
@@ -3252,6 +3262,8 @@ static long unlink_daemon_should_exit_cmd(
 long hermos_ioctl(struct file * file, unsigned int cmd, unsigned long arg)
 {
   switch (cmd) {
+    case HERMOS_GET_ENDPOINT_STATS_CMD:
+      return hermos_endpoint_stats_cmd((struct ioctl_endpoint_stats_args __user *)arg);
     case HERMOS_GET_VERSION_CMD:
       return get_version_cmd((struct ioctl_get_version_args __user *)arg);
     case HERMOS_ADD_PROCESS_CMD:
@@ -3320,6 +3332,9 @@ long hermos_ioctl(struct file * file, unsigned int cmd, unsigned long arg)
       return unlink_daemon_should_exit_cmd(
         (struct ioctl_unlink_daemon_should_exit_args __user *)arg);
     default:
+      /* Reject a different statistics argument layout without reading user memory. */
+      if (_IOC_TYPE(cmd) == _IOC_TYPE(HERMOS_GET_ENDPOINT_STATS_CMD) &&
+          _IOC_NR(cmd) == _IOC_NR(HERMOS_GET_ENDPOINT_STATS_CMD)) return -EPROTO;
       return -EINVAL;
   }
 }

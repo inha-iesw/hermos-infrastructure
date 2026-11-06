@@ -25,7 +25,7 @@ extern struct device * hermos_device;
 // Locking convention:
 //   Only hermos_ioctl_ prefixed functions acquire locks. All other internal/static functions are
 //   lock-free and rely on callers to hold the appropriate locks. Exceptions are
-//   hermos_process_exit_cleanup, hermos_exit_free_data, and
+//   hermos_process_exit_cleanup, hermos_exit_free_data, hermos_get_endpoint_stats, and
 //   hermos_increment_message_entry_rc, which manage locks directly.
 //
 // Lock ordering (to prevent deadlocks, always acquire in this order):
@@ -104,6 +104,8 @@ struct publisher_info
   uint32_t qos_depth;
   bool qos_is_transient_local;
   uint32_t entries_num;
+  uint64_t published_total;
+  bool is_removed;  /* Retained entries may outlive the endpoint; observation excludes it. */
   bool is_bridge;
   struct hlist_node node;
 };
@@ -118,6 +120,8 @@ struct subscriber_info
   bool qos_is_transient_local;
   bool qos_is_reliable;
   int64_t latest_received_entry_id;
+  uint64_t received_total;
+  uint64_t dropped_history_total;
   char * node_name;
   bool is_take_sub;
   bool ignore_local_publications;

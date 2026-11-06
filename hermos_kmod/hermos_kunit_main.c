@@ -28,12 +28,14 @@
 #include "hermos_kunit/hermos_kunit_set_ros2_subscriber_num.h"
 #include "hermos_kunit/hermos_kunit_take_msg.h"
 #include "hermos_memory_allocator.h"
+#include "hermos_kunit/observation/test_endpoint_stats.h"
 
 #include <kunit/test.h>
 
 MODULE_LICENSE("Dual BSD/GPL");
 
 struct kunit_case hermos_test_cases[] = {
+  TEST_CASES_ENDPOINT_STATS,
   TEST_CASES_ADD_SUBSCRIBER,
   TEST_CASES_ADD_PUBLISHER,
   TEST_CASES_REMOVE_SUBSCRIBER,

@@ -106,12 +106,14 @@ jobs:
           set -euo pipefail
           dst=linux/drivers/hermos
           rm -rf "${dst}"
-          mkdir -p "${dst}/hermos_kunit"
+          mkdir -p "${dst}/observation" "${dst}/hermos_kunit/observation"
           cp hermos_kmod/*.c hermos_kmod/*.h "${dst}/"
+          cp hermos_kmod/observation/*.[ch] "${dst}/observation/"
           cp hermos_kmod/hermos_kunit/*.c \
              hermos_kmod/hermos_kunit/*.h \
              hermos_kmod/hermos_kunit/Makefile.inc \
              "${dst}/hermos_kunit/"
+          cp hermos_kmod/hermos_kunit/observation/*.[ch] "${dst}/hermos_kunit/observation/"
           cp .github/kunit/Kbuild "${dst}/Makefile"
           if ! grep -q 'drivers/hermos' linux/drivers/Makefile; then
             echo 'obj-$(CONFIG_KUNIT) += hermos/' >> linux/drivers/Makefile

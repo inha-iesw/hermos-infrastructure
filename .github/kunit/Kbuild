@@ -6,7 +6,8 @@
 #
 # The core object list mirrors the KUNIT_BUILD=y branch of hermos_kmod/Makefile;
 # the test objects are shared via hermos_kunit/Makefile.inc, so only this list
-# needs syncing when a new top-level source file is added.
+# needs syncing when a new core source file is added. New source directories
+# also require the staging copy in kunit.yaml to be updated.
 obj-$(CONFIG_KUNIT) += hermos_kunit.o
 
 hermos_kunit-objs := \
@@ -16,7 +17,8 @@ hermos_kunit-objs := \
   hermos_init.o \
   hermos_exit.o \
   hermos_ioctl.o \
-  hermos_internal.o
+  hermos_internal.o \
+  observation/endpoint_stats.o
 
 include $(src)/hermos_kunit/Makefile.inc
 

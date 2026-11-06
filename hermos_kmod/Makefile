@@ -19,7 +19,7 @@ ifeq ($(KUNIT_BUILD),y)
 	  hermos_init.o \
 	  hermos_exit.o \
 	  hermos_ioctl.o \
-	  hermos_internal.o
+	  hermos_internal.o observation/endpoint_stats.o
     include $(src)/hermos_kunit/Makefile.inc
     ccflags-y += -DKUNIT_BUILD -fprofile-arcs -ftest-coverage
   else
@@ -31,7 +31,7 @@ else
 	hermos_init.o \
 	hermos_exit.o \
 	hermos_ioctl.o \
-	hermos_internal.o
+	hermos_internal.o observation/endpoint_stats.o
 endif
 
 KVERSION ?= $(shell uname -r)

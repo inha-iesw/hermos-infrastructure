@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstddef>
 
 #define MAX_PUBLISHER_NUM 1024   // Maximum number of publishers per topic
 #define MAX_TOPIC_LOCAL_ID 4096  // Bitmap size for per-entry subscriber reference tracking
@@ -115,3 +116,62 @@ struct ioctl_discovery_agent_exists_args
 #define HERMOS_GET_NODE_SUBSCRIBER_TOPICS_CMD _IOWR(0xA6, 23, union ioctl_node_info_args)
 #define HERMOS_GET_NODE_PUBLISHER_TOPICS_CMD _IOWR(0xA6, 24, union ioctl_node_info_args)
 #define HERMOS_ADD_DOMAIN_BRIDGE_CMD _IOW(0xA6, 28, struct ioctl_add_domain_bridge_args)
+
+
+/**
+ * @brief Read-only endpoint statistics ABI v1, owned by hermos_kmod/hermos.h.
+ *
+ * The wrapper and ctypes mirror this fixed layout. A layout change requires a
+ * new ABI version and wrapper symbol; counters exclude application/CUDA completion.
+ */
+#define HERMOS_ENDPOINT_STATS_ABI_VERSION 1U
+#define HERMOS_STATS_PUBLISHED 1U
+#define HERMOS_STATS_RECEIVED 2U
+#define HERMOS_STATS_HISTORY_DROP 4U
+#define HERMOS_STATS_QUEUED 8U
+#define HERMOS_STATS_RETAINED 16U
+
+struct endpoint_stats_ret
+{
+  char node_name[NODE_NAME_BUFFER_SIZE];
+  int32_t pid;  /* PID visible to the querying process; zero if outside its PID namespace. */
+  int32_t endpoint_id;
+  uint32_t domain_id;
+  uint32_t qos_depth;
+  uint8_t is_publisher;
+  uint8_t is_bridge;
+  uint8_t is_take_sub;
+  uint8_t qos_is_transient_local;
+  uint8_t qos_is_reliable;
+  uint8_t reserved[3];
+  uint64_t published_total;  /* Inserted kernel entries, including retained history. */
+  uint64_t received_total;  /* Successful subscriber reference acquisitions. */
+  uint64_t dropped_history_total;  /* Unread eligible entries removed by publisher history pruning. */
+  uint64_t queued_entries;  /* Resident eligible entries after the subscriber cursor, before QoS. */
+  uint64_t retained_entries;  /* Publisher: resident entries; subscriber: held kernel references. */
+  uint64_t sample_time_ns;  /* CLOCK_MONOTONIC, only comparable within the same host boot. */
+  uint32_t supported_fields;
+  uint32_t reserved2;
+};
+
+struct ioctl_endpoint_stats_args
+{
+  struct name_info topic_name;
+  uint64_t buffer_addr;
+  uint32_t capacity;
+  uint32_t domain_id;
+  uint8_t is_publisher;
+  uint8_t reserved[3];
+  uint32_t ret_count;  /* Required rows, copied back on success and -ENOBUFS. */
+  uint32_t abi_version;  /* Must equal HERMOS_ENDPOINT_STATS_ABI_VERSION. */
+  uint32_t row_size;  /* Caller row stride; mismatches fail before output is touched. */
+};
+
+#define HERMOS_GET_ENDPOINT_STATS_CMD _IOWR(0xA6, 34, struct ioctl_endpoint_stats_args)
+
+static_assert(sizeof(endpoint_stats_ret) == 336, "endpoint stats ABI v1 row size");
+static_assert(offsetof(endpoint_stats_ret, published_total) == 280, "published offset");
+static_assert(offsetof(endpoint_stats_ret, sample_time_ns) == 320, "sample time offset");
+static_assert(offsetof(endpoint_stats_ret, supported_fields) == 328, "supported fields offset");
+static_assert(sizeof(ioctl_endpoint_stats_args) == 48, "endpoint stats args size");
+static_assert(offsetof(ioctl_endpoint_stats_args, abi_version) == 40, "ABI version offset");
