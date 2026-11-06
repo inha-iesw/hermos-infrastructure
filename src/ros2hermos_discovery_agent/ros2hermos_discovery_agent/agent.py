@@ -2,10 +2,10 @@
 
 Reads the local Hermos state via the existing NS-scoped ioctl wrapper
 (libhermos_ioctl_wrapper.so) and publishes it as HermosDaemonState on
-``/_hermos_discovery`` so other namespaces and ECUs running ros2hermos
+``/_hermos_discovery_v2`` so other namespaces and ECUs running ros2hermos
 tooling can observe and make bridge generation decisions.
 
-One daemon process is intended to run per (IPC namespace, ROS_DOMAIN_ID):
+One bridge-capable daemon is intended to run per (IPC namespace, ROS_DOMAIN_ID):
 gossip is published on the agent's DDS domain, so a namespace shared by
 launches in different domains needs one agent per domain. To make duplicate
 launches (e.g. one node spawning the agent and another ``ros2 launch``
@@ -16,6 +16,7 @@ cleanly (code 0), leaving exactly one live agent per (ns, domain). The
 kmod is the single source of truth for agent liveness, so the idle self-exit
 is decided atomically against new processes and can never orphan a namespace
 (a process starting during the grace period keeps the agent running).
+Observation-only processes do not claim this slot and can coexist with that daemon.
 """
 
 import ctypes
@@ -24,15 +25,13 @@ import logging
 import os
 import socket
 import sys
+import time
 import uuid
 
 import rclpy
-from rclpy.clock import Clock, ClockType
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.parameter import Parameter
-from rclpy.qos import DurabilityPolicy, HistoryPolicy, LivelinessPolicy, QoSProfile, ReliabilityPolicy
-from rclpy.duration import Duration
 
 from ros2hermos_discovery_msgs.msg import (
     HermosDaemonState,
@@ -42,12 +41,14 @@ from ros2hermos_discovery_msgs.msg import (
 
 from . import bridge_decider
 from .type_registry import TypeRegistryReader
+from .observation.protocol import (
+    GOSSIP_TOPIC, LEASE_NS, latest_per_route, local_device_id, make_snapshot, reader_qos,
+    scope_key, validate_snapshot, writer_qos,
+    WRITER_BRIDGE, WRITER_OBSERVER,
+)
 
 
-GOSSIP_TOPIC = '/_hermos_discovery'
-SCHEMA_VERSION = 1
 PUBLISH_INTERVAL_SEC = 1.0
-LIVELINESS_LEASE_SEC = 30.0
 # Preferred over /etc/machine-id: avoids the systemd dep and the
 # baked-into-image case where every ECU collides on one host_uuid.
 BOOT_ID_PATH = '/proc/sys/kernel/random/boot_id'
@@ -60,7 +61,7 @@ TOPIC_NAME_BUFFER_SIZE = 256
 # How long a remote daemon's last snapshot may sit in _remote_states without
 # being refreshed before we drop it. Matches the gossip Liveliness lease so
 # DDS-side liveliness loss and local prune happen on the same timescale.
-REMOTE_STATE_STALE_SEC = 30.0
+REMOTE_STATE_STALE_SEC = LEASE_NS / 1e9
 # Opt-in idle-exit (--exit-when-idle CLI flag or the env var): the agent exits
 # after its (IPC NS, domain) has had no Hermos node for EXIT_WHEN_IDLE_GRACE_SEC.
 # Off by default, so a launch-started agent runs until the launch stops it.
@@ -109,8 +110,8 @@ class TopicInfoRet(ctypes.Structure):
     ]
 
 
-def _load_ioctl_wrapper():
-    """Load libhermos_ioctl_wrapper.so and set argtypes for the symbols we use."""
+def load_query_library(*, registration=True):
+    """Load query bindings; only agent callers need the singleton registration API."""
     lib = ctypes.CDLL('libhermos_ioctl_wrapper.so')
 
     lib.get_hermos_topics.argtypes = [
@@ -135,24 +136,30 @@ def _load_ioctl_wrapper():
     lib.free_hermos_topic_info_ret.argtypes = [ctypes.POINTER(TopicInfoRet)]
     lib.free_hermos_topic_info_ret.restype = None
 
-    lib.hermos_discovery_agent_register.argtypes = [ctypes.c_uint32]
-    lib.hermos_discovery_agent_register.restype = ctypes.c_int
-    lib.hermos_discovery_agent_should_exit.argtypes = [ctypes.c_uint32]
-    lib.hermos_discovery_agent_should_exit.restype = ctypes.c_int
-    lib.hermos_discovery_agent_commit_exit.argtypes = [ctypes.c_uint32]
-    lib.hermos_discovery_agent_commit_exit.restype = ctypes.c_int
+    if registration:
+        lib.hermos_discovery_agent_register.argtypes = [ctypes.c_uint32]
+        lib.hermos_discovery_agent_register.restype = ctypes.c_int
+        lib.hermos_discovery_agent_should_exit.argtypes = [ctypes.c_uint32]
+        lib.hermos_discovery_agent_should_exit.restype = ctypes.c_int
+        lib.hermos_discovery_agent_commit_exit.argtypes = [ctypes.c_uint32]
+        lib.hermos_discovery_agent_commit_exit.restype = ctypes.c_int
+
+    from .observation.snapshot import configure_endpoint_stats
+    configure_endpoint_stats(lib)
 
     return lib
 
 
 def _ioctl_to_endpoint(
         info: TopicInfoRet, topic_name: str, role: str,
-        registry: TypeRegistryReader | None = None) -> HermosEndpoint:
+        registry: TypeRegistryReader | None = None, *, domain_id,
+        statistics_status='unsupported') -> HermosEndpoint:
     """Convert one ``topic_info_ret`` row to an HermosEndpoint msg.
 
     ``pid`` is looked up from the tmpfs type registry (written by hermoslib
     at Publisher/Subscription construction time) using
-    ``(topic_name, role, node_name)`` as the join key. When no match is found
+    ``(domain_id, topic_name, role, node_name)`` as the join key, with the
+    writer's process start identity verified. When no match is found
     the field stays 0, which lets the rest of the pipeline degrade gracefully
     (the gossip publication still flows; just no pid for that endpoint).
     """
@@ -160,13 +167,31 @@ def _ioctl_to_endpoint(
     ep.node_name = info.node_name.decode('utf-8', errors='replace')
     ep.pid = 0
     if registry is not None:
-        entry = registry.lookup(topic_name, role, ep.node_name)
+        entry = registry.lookup(topic_name, role, ep.node_name, domain_id=domain_id)
         if entry is not None:
             ep.pid = entry.pid
     ep.qos_depth = info.qos_depth
     ep.qos_is_transient_local = info.qos_is_transient_local
     ep.qos_is_reliable = info.qos_is_reliable
     ep.is_bridge = info.is_bridge
+    ep.endpoint_id = -1
+    ep.statistics_status = statistics_status
+    return ep
+
+
+def _native_to_endpoint(info) -> HermosEndpoint:
+    """Copy only public counters and identity; no IPC handles leave this process."""
+    ep = HermosEndpoint()
+    ep.node_name = info.node_name.decode('utf-8', errors='replace')
+    ep.pid = info.pid
+    ep.endpoint_id = info.endpoint_id
+    ep.qos_depth = info.qos_depth
+    for field in ('qos_is_transient_local', 'qos_is_reliable', 'is_bridge', 'is_take_sub'):
+        setattr(ep, field, bool(getattr(info, field)))
+    ep.statistics_status = 'available'
+    from .observation.snapshot import COUNTERS
+    for field in ('supported_fields', 'sample_time_ns', *(name for _, name in COUNTERS)):
+        setattr(ep, field, getattr(info, field))
     return ep
 
 
@@ -194,6 +219,9 @@ def read_local_topics(
         ctypes.byref(topic_count), ctypes.pointer(domain_ids_ptr))
     topics = []
     if not topic_names_ptr:
+        if topic_count.value < 0:
+            code = -topic_count.value
+            raise OSError(code, 'HERM0S topic query failed: ' + os.strerror(code))
         return topics
 
     try:
@@ -216,9 +244,7 @@ def read_local_topics(
             hermos_topic.subscribers = _collect_endpoints(
                 lib.get_hermos_sub_nodes, lib, topic_name_b, topic_name, domain_id, 'sub',
                 registry)
-            # Type name comes from the tmpfs registry; any registered
-            # endpoint on this topic carries the same type (ROS 2
-            # invariant), so the first non-empty one wins.
+            # Never choose one type from conflicting process announcements.
             if registry is not None:
                 resolved = _resolve_topic_type(hermos_topic, registry)
                 if resolved:
@@ -233,20 +259,25 @@ def read_local_topics(
 
 def _resolve_topic_type(
         hermos_topic: HermosTopic, registry: TypeRegistryReader) -> str:
-    for ep in hermos_topic.publishers:
-        entry = registry.lookup(hermos_topic.topic_name, 'pub', ep.node_name)
-        if entry is not None and entry.type_name:
-            return entry.type_name
-    for ep in hermos_topic.subscribers:
-        entry = registry.lookup(hermos_topic.topic_name, 'sub', ep.node_name)
-        if entry is not None and entry.type_name:
-            return entry.type_name
-    return ''
+    types = set()
+    for role, endpoints in (('pub', hermos_topic.publishers), ('sub', hermos_topic.subscribers)):
+        for ep in endpoints:
+            type_name = registry.lookup_type(
+                hermos_topic.topic_name, role, ep.node_name, domain_id=hermos_topic.domain_id,
+                pid=ep.pid or None)
+            if type_name:
+                types.add(type_name)
+    return next(iter(types)) if len(types) == 1 else ''
 
 
 def _collect_endpoints(
         getter, lib, topic_name_b: bytes, topic_name: str, domain_id: int, role: str,
         registry: TypeRegistryReader | None = None) -> list:
+    from .observation.snapshot import read_endpoint_stats
+
+    status, rows = read_endpoint_stats(lib, topic_name, domain_id, role == 'pub')
+    if status == 'available':
+        return [_native_to_endpoint(row) for row in rows]
     count = ctypes.c_int()
     array = getter(topic_name_b, ctypes.byref(count), domain_id)
     endpoints = []
@@ -254,7 +285,9 @@ def _collect_endpoints(
         return endpoints
     try:
         for i in range(count.value):
-            endpoints.append(_ioctl_to_endpoint(array[i], topic_name, role, registry))
+            endpoints.append(_ioctl_to_endpoint(
+                array[i], topic_name, role, registry, domain_id=domain_id,
+                statistics_status=status))
     finally:
         lib.free_hermos_topic_info_ret(array)
     return endpoints
@@ -296,18 +329,9 @@ def _read_ros_domain_id() -> int:
     return value
 
 
-def _gossip_qos() -> QoSProfile:
-    return QoSProfile(
-        reliability=ReliabilityPolicy.RELIABLE,
-        durability=DurabilityPolicy.TRANSIENT_LOCAL,
-        history=HistoryPolicy.KEEP_LAST,
-        depth=1,
-        # AUTOMATIC: rclpy (Humble) does not expose ``assert_liveliness`` on
-        # Publisher, so MANUAL_BY_TOPIC cannot be driven reliably from Python.
-        # AUTOMATIC keeps the publisher alive as long as the participant is up.
-        liveliness=LivelinessPolicy.AUTOMATIC,
-        liveliness_lease_duration=Duration(seconds=LIVELINESS_LEASE_SEC),
-    )
+def _gossip_qos():
+    """Writer profile; subscriptions must use the shared reader profile."""
+    return writer_qos()
 
 
 def _read_agent_version() -> str:
@@ -321,9 +345,9 @@ def _read_agent_version() -> str:
 class DiscoveryAgent(Node):
     """rclpy Node that publishes the local Hermos state every PUBLISH_INTERVAL_SEC.
 
-    Also subscribes to its own gossip topic and caches the latest snapshot per
-    ``(host_uuid, ipc_ns_inode)``; each tick the bridge decider diffs that
-    against the local state and issues cross-NS bridge requests.
+    The default mode also listens to gossip and requests cross-namespace
+    bridges. ``observation_only`` creates only the metadata writer; a supervisor
+    owns its executor and must acknowledge registration before dispatch.
     """
 
     def __init__(
@@ -331,37 +355,55 @@ class DiscoveryAgent(Node):
         registry: TypeRegistryReader | None = None,
         *,
         exit_when_idle: bool | None = None,
+        context=None,
+        observation_only: bool = False,
+        session_id: str | None = None,
     ):
         self._host_uuid = _read_host_uuid()
         self._host_hostname = socket.gethostname()
         self._ipc_ns_inode = _read_ipc_ns_inode()
-        self._domain_id = _read_ros_domain_id()
+        self._domain_id = context.get_domain_id() if context is not None else _read_ros_domain_id()
+        # The supervisor factory supplies its epoch explicitly. Standalone
+        # writers need their own identity even when they inherit that environment.
+        self._session_id = session_id or str(uuid.uuid4())
+        self._observation_only = observation_only
         # Multiple agents may run on one ECU (one per (IPC NS, domain)); disambiguate.
         host_short = self._host_uuid.replace('-', '')[:8]
+        observer_suffix = f'_observer_{os.getpid()}' if observation_only else ''
         # Force use_sim_time=False so the 1 Hz timer + clock reads are
         # wall-clock regardless of /clock; sim-time playback would otherwise
         # stretch the publish cadence past the liveliness lease window.
         super().__init__(
-            f'hermos_discovery_agent_{host_short}_{self._ipc_ns_inode}_d{self._domain_id}',
+            f'hermos_discovery_agent_{host_short}_{self._ipc_ns_inode}_d{self._domain_id}'
+            f'{observer_suffix}',
             parameter_overrides=[Parameter('use_sim_time', value=False)],
+            context=context,
         )
-        self._lib = _load_ioctl_wrapper()
+        try:
+            self._initialize(registry, exit_when_idle)
+        except BaseException:
+            self.destroy_node()
+            raise
+
+    def _initialize(self, registry, exit_when_idle):
+        self._lib = load_query_library(registration=not self._observation_only)
         self._hermos_version = _read_agent_version()
-        # Independent wall-clock for prune / receive timestamps so they stay
-        # consistent even if a future change accidentally enables sim time.
-        self._clock = Clock(clock_type=ClockType.SYSTEM_TIME)
         self._registry = registry if registry is not None else TypeRegistryReader(
             self._ipc_ns_inode, logger=self.get_logger())
 
         qos = _gossip_qos()
         self._pub = self.create_publisher(HermosDaemonState, GOSSIP_TOPIC, qos)
-        self._sub = self.create_subscription(
-            HermosDaemonState, GOSSIP_TOPIC, self._on_remote_state, qos)
+        self._sub = None
+        if not self._observation_only:
+            self._sub = self.create_subscription(
+                HermosDaemonState, GOSSIP_TOPIC, self._on_remote_state, reader_qos())
         self._remote_states = {}
 
         if exit_when_idle is None:
             exit_when_idle = _exit_when_idle_enabled()
-        self._exit_when_idle = exit_when_idle
+        # Atomic idle-exit belongs to the registered bridge agent. Observers are
+        # controlled by their caller and must never clear another agent's slot.
+        self._exit_when_idle = exit_when_idle and not self._observation_only
         self._idle_tracker = IdleExitTracker(
             threshold=round(EXIT_WHEN_IDLE_GRACE_SEC / PUBLISH_INTERVAL_SEC))
 
@@ -373,11 +415,17 @@ class DiscoveryAgent(Node):
             f'version={self._hermos_version}')
 
     def _on_tick(self) -> None:
-        self._registry.rebuild()
         self._registry.cleanup_dead_pids()
+        self._registry.rebuild()
         self._prune_stale_remote_states()
-        snapshot = self.publish_snapshot()
-        self._dispatch_bridge_requests(snapshot)
+        try:
+            snapshot = self.publish_snapshot()
+        except OSError as exc:
+            self.get_logger().warning(f'local metadata unavailable; skipping snapshot: {exc}')
+            self._idle_tracker.reset()
+            return
+        if not self._observation_only:
+            self._dispatch_bridge_requests(snapshot)
         if self._exit_when_idle:
             self._maybe_exit_when_idle()
 
@@ -412,10 +460,10 @@ class DiscoveryAgent(Node):
         the freshness reference rather than the publisher's stamp.
         """
         if now_sec is None:
-            now_sec = self._clock.now().nanoseconds / 1e9
+            now_sec = time.monotonic()
         stale_keys = [
             key for key, (_msg, received_at) in self._remote_states.items()
-            if now_sec - received_at > stale_after_sec
+            if now_sec - received_at >= min(stale_after_sec, _msg.lease_duration_ns / 1e9)
         ]
         for key in stale_keys:
             del self._remote_states[key]
@@ -429,68 +477,83 @@ class DiscoveryAgent(Node):
     def _dispatch_bridge_requests(self, local_state: HermosDaemonState) -> None:
         if not self._remote_states:
             return
-        remote_states = {key: msg for key, (msg, _received_at) in self._remote_states.items()}
+        remote_states = latest_per_route(self._remote_states.values())
         requests = bridge_decider.decide_bridges(local_state, remote_states)
         if requests:
             bridge_decider.dispatch_requests(
                 requests, self._ipc_ns_inode, logger=self.get_logger())
 
     def build_state(self) -> HermosDaemonState:
-        msg = HermosDaemonState()
-        msg.schema_version = SCHEMA_VERSION
-        msg.hermos_version = self._hermos_version
-        msg.host_uuid = self._host_uuid
-        msg.host_hostname = self._host_hostname
-        msg.ipc_ns_inode = self._ipc_ns_inode
-        msg.topics = read_local_topics(self._lib, self._registry, self._domain_id)
-        return msg
+        return make_snapshot(
+            hermos_version=self._hermos_version, host_uuid=self._host_uuid,
+            hostname=self._host_hostname, ipc_ns_inode=self._ipc_ns_inode,
+            domain_id=self._domain_id, session_id=self._session_id,
+            device_id=local_device_id(),
+            writer_role=WRITER_OBSERVER if self._observation_only else WRITER_BRIDGE,
+            topics=read_local_topics(self._lib, self._registry, self._domain_id))
 
     def _on_remote_state(self, msg: HermosDaemonState) -> None:
+        try:
+            validate_snapshot(msg)
+        except ValueError:
+            return
+        if msg.writer_role != WRITER_BRIDGE or msg.domain_id != self._domain_id:
+            return
         if msg.host_uuid == self._host_uuid and msg.ipc_ns_inode == self._ipc_ns_inode:
             return
-        received_at = self._clock.now().nanoseconds / 1e9
-        self._remote_states[(msg.host_uuid, msg.ipc_ns_inode)] = (msg, received_at)
+        received_at = time.monotonic()
+        key = scope_key(msg)
+        self._remote_states[key] = (msg, received_at)
 
     @property
     def remote_states(self) -> dict:
-        """Map of ``(host_uuid, ipc_ns_inode)`` to ``(msg, received_at_sec)``."""
+        """Map of ``(host, namespace, domain, device, session)`` to message and arrival time."""
         return self._remote_states
 
 
 def main(argv=None) -> int:
-    # Claim the per-(IPC namespace, domain) singleton in the kmod before any DDS / ioctl work.
-    # The kmod decides the claim atomically, so a duplicate loses and exits cleanly (0); an
-    # ioctl error exits 1.
-    #
-    # A duplicate that exits early *could* make launch_test treat it as a crashed node and tear
-    # down the launch tree. That's not a risk here: the launch emits one agent per tree, so a lost
-    # claim always means a separate launch/run — never a same-tree sibling — which exiting can't
-    # affect.
-    domain_id = _read_ros_domain_id()
-    try:
-        lib = _load_ioctl_wrapper()
-        claim = lib.hermos_discovery_agent_register(domain_id)
-    except (OSError, AttributeError) as e:
-        # Missing library or symbol (e.g. version skew): fail cleanly instead of a traceback.
-        sys.stderr.write(f'hermos_discovery_agent: cannot use the ioctl wrapper: {e}\n')
-        return 1
-    if claim == 1:
-        sys.stderr.write(
-            'hermos_discovery_agent: another instance is already running in this '
-            f'(IPC namespace, domain={domain_id}); exiting.\n')
-        return 0
-    if claim < 0:
-        # Don't masquerade as "already running" — propagate failure so supervisors can detect it.
-        return 1
+    arguments = sys.argv if argv is None else argv
+    observation_only = '--observation-only' in arguments
+    if not observation_only:
+        # Claim the per-(IPC namespace, domain) singleton in the kmod before any DDS / ioctl work.
+        # The kmod decides the claim atomically, so a duplicate loses and exits cleanly (0); an
+        # ioctl error exits 1.
+        #
+        # A duplicate that exits early *could* make launch_test treat it as a crashed node and tear
+        # down the launch tree. That's not a risk here: the launch emits one agent per tree, so a lost
+        # claim always means a separate launch/run — never a same-tree sibling — which exiting can't
+        # affect.
+        domain_id = _read_ros_domain_id()
+        try:
+            lib = load_query_library()
+            claim = lib.hermos_discovery_agent_register(domain_id)
+        except (OSError, AttributeError) as e:
+            # Missing library or symbol (e.g. version skew): fail cleanly instead of a traceback.
+            sys.stderr.write(f'hermos_discovery_agent: cannot use the ioctl wrapper: {e}\n')
+            return 1
+        if claim == 1:
+            sys.stderr.write(
+                'hermos_discovery_agent: another instance is already running in this '
+                f'(IPC namespace, domain={domain_id}); exiting.\n')
+            return 0
+        if claim < 0:
+            # Don't masquerade as "already running" — propagate failure so supervisors can detect it.
+            return 1
 
-    rclpy.init(args=argv)
-    node = DiscoveryAgent(exit_when_idle=_exit_when_idle_enabled(argv))
+    rclpy.init(args=[arg for arg in arguments if arg != '--observation-only'])
+    node = None
     try:
+        node = DiscoveryAgent(
+            exit_when_idle=_exit_when_idle_enabled(arguments), observation_only=observation_only)
         rclpy.spin(node)
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
+    except (OSError, AttributeError) as exc:
+        sys.stderr.write(f'hermos_discovery_agent: initialization/query failed: {exc}\n')
+        return 1
     finally:
-        node.destroy_node()
+        if node is not None:
+            node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
     return 0

@@ -8,11 +8,12 @@ from ros2hermos.discovery import (
     bridge_label_from_roles,
     BRIDGE_LABEL_TEXT,
     CIE_THREAD_CONFIGURATOR_NAMESPACE,
-    collect_announcements_with_fallback,
-    collect_bridge_roles,
     warn_if_gossip_timeout_overridden,
-    warn_if_using_fallback,
 )
+from ros2hermos.observation.cli import (
+    add_scope_arguments, bridge_roles_for_domain, collect_for_args, scopes_for_args,
+)
+from ros2hermos.observation.scope import scope_label
 
 class ListHermosVerb(VerbExtension):
     "Output a list of available topics including Hermos"
@@ -22,14 +23,18 @@ class ListHermosVerb(VerbExtension):
             '-d', '--debug', action='store_true',
             help='Include internal topics (CIE thread configurator) in the output')
         add_gossip_timeout_arg(parser)
+        add_scope_arguments(parser)
 
     def main(self, *, args):
         warn_if_gossip_timeout_overridden(args)
         with NodeStrategy(None) as node:
-            snapshots, used_fallback = collect_announcements_with_fallback(
-                node, timeout_sec=args.gossip_timeout)
-            warn_if_using_fallback(node, used_fallback, args.gossip_timeout, snapshots)
-            bridge_roles = collect_bridge_roles(snapshots)
+            try:
+                collected = collect_for_args(node, args)
+                scopes = scopes_for_args(collected, node, args)
+                roles = bridge_roles_for_domain(collected, node)
+            except ValueError as exc:
+                return str(exc)
+            snapshots = [state for _, state in scopes]
 
             def divide_ros2_topic_into_pubsub(topic_names):
                 pub_topics = []
@@ -81,9 +86,11 @@ class ListHermosVerb(VerbExtension):
 
             for topic in sorted(merged_topics):
                 if topic in hermos_topics_set:
-                    status = bridge_label_from_roles(
-                        bridge_roles.get(topic, []), topic in ros2_pub_set, topic in ros2_sub_set)
-                    suffix = f" ({BRIDGE_LABEL_TEXT[status]})"
+                    for scope, state in scopes:
+                        if topic in all_topic_names([state]):
+                            status = bridge_label_from_roles(
+                                roles.get(topic, []), topic in ros2_pub_set, topic in ros2_sub_set)
+                            suffix = f" ({BRIDGE_LABEL_TEXT[status]})"
+                            print(f"{topic}{suffix} [{scope_label(scope)}]")
                 else:
-                    suffix = ""
-                print(f"{topic}{suffix}")
+                    print(topic)

@@ -12,11 +12,12 @@ from ros2hermos.discovery import (
     add_gossip_timeout_arg,
     bridge_label_from_roles,
     BRIDGE_LABEL_TEXT,
-    collect_announcements_with_fallback,
-    collect_bridge_roles,
     warn_if_gossip_timeout_overridden,
-    warn_if_using_fallback,
 )
+from ros2hermos.observation.cli import (
+    add_scope_arguments, bridge_roles_for_domain, collect_for_args, selected_snapshots,
+)
+from ros2hermos.observation.scope import scope_label
 
 def service_name_from_request_topic(topic_name):
     prefix = '/HERMOS_SRV_REQUEST'
@@ -38,16 +39,27 @@ class NodeInfoHermosVerb(VerbExtension):
             'node_name',
             help='Fully qualified node name to request information with Hermos topics')
         add_gossip_timeout_arg(parser)
+        add_scope_arguments(parser)
 
     def main(self, *, args):
         warn_if_gossip_timeout_overridden(args)
         node_name = args.node_name
 
         with NodeStrategy(None) as node:
-            snapshots, used_fallback = collect_announcements_with_fallback(
-                node, timeout_sec=args.gossip_timeout)
-            warn_if_using_fallback(node, used_fallback, args.gossip_timeout, snapshots)
-            bridge_roles = collect_bridge_roles(snapshots)
+            try:
+                collected = collect_for_args(node, args)
+                scope, snapshots = selected_snapshots(
+                    collected, node, args, node_name=node_name)
+                bridge_roles = bridge_roles_for_domain(collected, node)
+            except ValueError as exc:
+                return str(exc)
+            if scope is not None:
+                print(f'HERM0S {scope_label(scope)}')
+                pids = {str(endpoint.pid) if endpoint.pid > 0 else 'unknown'
+                        for state in snapshots for topic in state.topics
+                        for endpoint in [*topic.publishers, *topic.subscribers]
+                        if endpoint.node_name == node_name}
+                print(f'PIDs: {", ".join(sorted(pids))}')
 
             def get_hermos_label(topic_name, ros2_sub_topics, ros2_pub_topics):
                 """Get the appropriate label for an Hermos-enabled topic."""
@@ -165,7 +177,6 @@ class NodeInfoHermosVerb(VerbExtension):
                 return
 
             ros2_topic_raw = get_topic_names_and_types(node=node)
-            ros2_topic_dir = [{'name': topic_name, 'types': topic_types} for topic_name, topic_types in ros2_topic_raw]
             ros2_topic_name_set = set(topic_name for topic_name, _ in ros2_topic_raw)
 
             # Only query pub/sub breakdown for hermos topics that also exist in ROS2
@@ -179,7 +190,8 @@ class NodeInfoHermosVerb(VerbExtension):
             for sub in subscribers:
                 if sub.name in hermos_sub_set:
                     label = get_hermos_label(sub.name, ros2_sub_topics, ros2_pub_topics)
-                    print(f"    {sub.name}: {', '.join(sub.types)} {label}")
+                    native_type = gossip_topic_types.get(sub.name, '<UNKNOWN>')
+                    print(f"    {sub.name}: DDS={', '.join(sub.types)}; HERM0S={native_type} {label}")
                 else:
                     print(f"    {sub.name}: {', '.join(sub.types)}")
 
@@ -187,13 +199,8 @@ class NodeInfoHermosVerb(VerbExtension):
             for hermos_sub in hermos_subscribers:
                 if hermos_sub in ros2_sub_name_set:
                     continue
-                matching_topics = [topic for topic in ros2_topic_dir if topic['name'] == hermos_sub]
-                if matching_topics:
-                    topic_types = '; '.join([', '.join(topic['types']) for topic in matching_topics])
-                    print(f"    {hermos_sub}: {topic_types} {get_hermos_label(hermos_sub, ros2_sub_topics, ros2_pub_topics)}")
-                else:
-                    type_label = gossip_topic_types.get(hermos_sub, '<UNKNOWN>')
-                    print(f"    {hermos_sub}: {type_label} {get_hermos_label(hermos_sub, ros2_sub_topics, ros2_pub_topics)}")
+                type_label = gossip_topic_types.get(hermos_sub, '<UNKNOWN>')
+                print(f"    {hermos_sub}: {type_label} {get_hermos_label(hermos_sub, ros2_sub_topics, ros2_pub_topics)}")
 
             # ======== Publishers ========
             print("  Publishers:")
@@ -201,7 +208,8 @@ class NodeInfoHermosVerb(VerbExtension):
             for pub in publishers:
                 if pub.name in hermos_pub_set:
                     label = get_hermos_label(pub.name, ros2_sub_topics, ros2_pub_topics)
-                    print(f"    {pub.name}: {', '.join(pub.types)} {label}")
+                    native_type = gossip_topic_types.get(pub.name, '<UNKNOWN>')
+                    print(f"    {pub.name}: DDS={', '.join(pub.types)}; HERM0S={native_type} {label}")
                 else:
                     print(f"    {pub.name}: {', '.join(pub.types)}")
 
@@ -209,13 +217,8 @@ class NodeInfoHermosVerb(VerbExtension):
             for hermos_pub in hermos_publishers:
                 if hermos_pub in ros2_pub_name_set:
                     continue
-                matching_topics = [topic for topic in ros2_topic_dir if topic['name'] == hermos_pub]
-                if matching_topics:
-                    topic_types = '; '.join([', '.join(topic['types']) for topic in matching_topics])
-                    print(f"    {hermos_pub}: {topic_types} {get_hermos_label(hermos_pub, ros2_sub_topics, ros2_pub_topics)}")
-                else:
-                    type_label = gossip_topic_types.get(hermos_pub, '<UNKNOWN>')
-                    print(f"    {hermos_pub}: {type_label} {get_hermos_label(hermos_pub, ros2_sub_topics, ros2_pub_topics)}")
+                type_label = gossip_topic_types.get(hermos_pub, '<UNKNOWN>')
+                print(f"    {hermos_pub}: {type_label} {get_hermos_label(hermos_pub, ros2_sub_topics, ros2_pub_topics)}")
 
             # ======== Service ========
             print("  Service Servers:")

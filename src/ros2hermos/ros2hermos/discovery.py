@@ -1,6 +1,6 @@
-"""Subscribe to /_hermos_discovery; fall back to ioctl when no agent gossips.
+"""Subscribe to /_hermos_discovery_v2; fall back to ioctl when no agent gossips.
 
-Staleness is bounded by the publisher's DDS Liveliness lease.
+Metadata lifetime is bounded by publisher lifespan and local receipt leases.
 """
 
 import argparse
@@ -8,19 +8,16 @@ import sys
 import time
 
 import rclpy
-from rclpy.duration import Duration
-from rclpy.qos import (
-    DurabilityPolicy, HistoryPolicy, LivelinessPolicy, QoSProfile, ReliabilityPolicy,
-)
 
 from ros2hermos._ioctl import self_ns_snapshot
+from ros2hermos.observation.scope import current_domain, SnapshotCache
 
 from ros2hermos_discovery_msgs.msg import HermosDaemonState, HermosEndpoint
 
 
-GOSSIP_TOPIC = '/_hermos_discovery'
+from ros2hermos_discovery_agent.observation.protocol import GOSSIP_TOPIC, reader_qos
+
 DEFAULT_COLLECT_TIMEOUT_SEC = 2.0
-LIVELINESS_LEASE_SEC = 30.0
 
 
 def add_gossip_timeout_arg(parser) -> None:
@@ -47,35 +44,34 @@ def warn_if_gossip_timeout_overridden(args) -> None:
             file=sys.stderr)
 
 
-def gossip_qos() -> QoSProfile:
-    """Profile for the gossip subscription.
-
-    Must match ``ros2hermos_discovery_agent.agent._gossip_qos`` on every
-    field except depth (per-endpoint) so DDS accepts the match.
-    """
-    return QoSProfile(
-        reliability=ReliabilityPolicy.RELIABLE,
-        durability=DurabilityPolicy.TRANSIENT_LOCAL,
-        history=HistoryPolicy.KEEP_LAST,
-        depth=64,
-        liveliness=LivelinessPolicy.AUTOMATIC,
-        liveliness_lease_duration=Duration(seconds=LIVELINESS_LEASE_SEC),
-    )
+def gossip_qos():
+    """Use the backend reader contract without a remote wall-clock lifespan."""
+    return reader_qos()
 
 
 def collect_announcements(
     node,
     timeout_sec: float = DEFAULT_COLLECT_TIMEOUT_SEC,
 ) -> list[HermosDaemonState]:
-    """Collect one latest snapshot per ``(host_uuid, ipc_ns_inode)`` from gossip.
+    """Collect fresh snapshots while preserving host, namespace, domain and session.
 
     Returns one ``HermosDaemonState`` per gossiping agent, or ``[]`` when no
     agent is reachable within ``timeout_sec``.
     """
-    snapshots = {}
+    if timeout_sec <= 0:
+        return []
+    snapshots = SnapshotCache()
 
-    def on_msg(msg: HermosDaemonState) -> None:
-        snapshots[(msg.host_uuid, msg.ipc_ns_inode)] = msg
+    def on_msg(msg: HermosDaemonState, info=None) -> None:
+        # Humble invokes callbacks with only the message. Newer rclpy versions
+        # may provide MessageInfo; use its writer identity when available.
+        raw_gid = (info.get('publisher_gid') if isinstance(info, dict)
+                   else getattr(info, 'publisher_gid', None))
+        gid = bytes(raw_gid) if raw_gid is not None else None
+        try:
+            snapshots.update(msg, received_at=time.monotonic(), publisher_gid=gid)
+        except ValueError as exc:
+            print(f'WARNING: {exc}; ignoring metadata snapshot.', file=sys.stderr)
 
     spin_node = _resolve_spin_node(node)
     sub = spin_node.create_subscription(
@@ -87,37 +83,62 @@ def collect_announcements(
             try:
                 publishers = spin_node.get_publishers_info_by_topic(GOSSIP_TOPIC)
             except Exception:
-                publishers = []
+                publishers = None
+            live_gids = ({bytes(publisher.endpoint_gid) for publisher in publishers}
+                         if publishers is not None else None)
+            active = snapshots.active(now=time.monotonic(), live_gids=live_gids)
             # Return as soon as every visible publisher has reported, rather
             # than waiting out timeout_sec (now just an upper bound).
-            # One agent = one publisher = one (host_uuid, ipc_ns_inode) snapshot,
+            # One agent = one publisher = one (host, namespace, domain, session) snapshot,
             # so the publisher count is how many snapshots to expect.
-            if publishers and len(snapshots) >= len(publishers):
+            if publishers and len(active) >= len(publishers):
                 break
     finally:
         spin_node.destroy_subscription(sub)
 
-    return list(snapshots.values())
+    return snapshots.active(now=time.monotonic())
 
 
 def collect_announcements_with_fallback(
     node,
     timeout_sec: float = DEFAULT_COLLECT_TIMEOUT_SEC,
+    *,
+    strict: bool = False,
 ) -> tuple[list[HermosDaemonState], bool]:
     """Gossip first, then ioctl fallback. Returns ``(snapshots, used_fallback)``.
 
     - ``used_fallback`` is False when at least one agent gossiped; ``snapshots``
       is then every reachable agent's state.
-    - Otherwise it is True and ``snapshots`` is the local-NS ioctl view: a
-      single-element ``[state]`` whose ``topics`` may be empty (kmod absent or
-      nothing registered), or ``[]`` only if the ioctl wrapper library itself
-      cannot be loaded.
+    - Otherwise it is True and ``snapshots`` is the local-NS ioctl view. Empty
+      topics mean the query succeeded but found no registered topic.
+    - A missing/inaccessible device or wrapper returns ``[]`` with a stderr
+      note, so DDS-only commands remain usable. ``strict=True`` instead raises
+      OSError for device errors or returns ``[]`` for a missing wrapper, allowing
+      explicit native-only queries to report failure.
     """
-    snapshots = collect_announcements(node, timeout_sec)
+    snapshots = collect_announcements(node, timeout_sec) if timeout_sec > 0 else []
     if snapshots:
         return snapshots, False
-    fallback = self_ns_snapshot()
+    try:
+        fallback = self_ns_snapshot(domain_id=current_domain(node))
+    except OSError as exc:
+        if strict:
+            raise
+        print(f'NOTE: {local_metadata_error(exc)}; continuing with DDS information.',
+              file=sys.stderr)
+        return [], True
+    if fallback is None and not strict:
+        print('NOTE: Local HERM0S metadata unavailable: ioctl wrapper missing or incompatible; '
+              'continuing with DDS information.', file=sys.stderr)
     return ([fallback] if fallback is not None else []), True
+
+
+def local_metadata_error(error: OSError) -> str:
+    """Describe local query failure without confusing it with an empty domain."""
+    import errno
+    status = ('permission_denied' if error.errno in (errno.EACCES, errno.EPERM)
+              else 'unavailable')
+    return f'Local HERM0S metadata {status}: {error}'
 
 
 def _resolve_spin_node(node):
@@ -138,9 +159,8 @@ def warn_if_using_fallback(
     """Best-effort stderr note when gossip was unavailable and ioctl fallback ran.
 
     ``snapshots`` is the fallback result from ``collect_announcements_with_fallback``.
-    The local ioctl fallback returns a ``[state]`` with empty ``topics`` (not ``[]``)
-    when the kmod is absent or nothing is registered, so "no Hermos here" is
-    detected by the absence of topics, not by an empty list.
+    A successful query with no endpoints returns a state with empty topics.
+    Device/wrapper failures return ``[]`` and already emit a separate note.
     """
     if not used_fallback or timeout_sec <= 0:
         return
@@ -158,14 +178,14 @@ def warn_if_using_fallback(
         if not any(snap.topics for snap in snapshots):
             return
         print(
-            'NOTE: no /_hermos_discovery agent visible; showing local '
+            'NOTE: no /_hermos_discovery_v2 agent visible; showing local '
             'NS only via ioctl. Start one with '
             '`ros2 run ros2hermos_discovery_agent discovery_agent` to '
             'see other NSes / ECUs.',
             file=sys.stderr)
     else:
         print(
-            f'WARNING: /_hermos_discovery has {len(publishers)} publisher(s) '
+            f'WARNING: /_hermos_discovery_v2 has {len(publishers)} publisher(s) '
             f'visible but no snapshot received in {timeout_sec:.1f}s; falling '
             'back to ioctl (local NS only). Try '
             '`ros2 daemon stop && ros2 daemon start` (the ros2 daemon may be '
@@ -266,9 +286,9 @@ BRIDGE_LABEL_TEXT = {
 def collect_bridge_roles(
     snapshots: list[HermosDaemonState],
 ) -> dict[str, list[tuple[bool, bool, bool, bool]]]:
-    """Map ``topic_name -> per-NS bridge roles`` in a single pass over snapshots.
+    """Map ``topic_name -> per-source bridge roles`` in one pass over snapshots.
 
-    Each value is a list with one entry per NS that has a real (non-bridge)
+    Each value is a list with one entry per namespace/device that has a real (non-bridge)
     endpoint on that topic: ``(real_pub, real_sub, inbound_bridge,
     outbound_bridge)``. A bridge endpoint is directional: an inbound bridge
     (ROS 2 -> Hermos) is a bridge publisher; an outbound bridge
@@ -292,7 +312,7 @@ def collect_bridge_roles(
 
 
 def bridge_label_from_roles(ns_roles: list, ros2_has_pub: bool, ros2_has_sub: bool) -> str:
-    """Classify a topic's bridge status from its per-NS roles.
+    """Classify a topic's bridge status from its namespace/device source roles.
 
     Returns ``BRIDGE_ENABLED`` / ``BRIDGE_BRIDGED`` / ``BRIDGE_WARN``. A bridge
     is *expected* only where data must actually cross a boundary: a real
@@ -301,7 +321,8 @@ def bridge_label_from_roles(ns_roles: list, ros2_has_pub: bool, ros2_has_sub: bo
     if a producer exists elsewhere. So WARN fires only when such a bridge is
     expected but missing (e.g. a talker and listener in different NSes with no
     bridges); BRIDGED means every expected bridge is present; ENABLED means no
-    bridging is expected (a lone endpoint, or producer/consumer in the same NS).
+    bridging is expected (a lone endpoint, or producer/consumer on the same device
+    in the same NS). Separate devices must not be treated as natively connected.
 
     ``ns_roles`` comes from :func:`collect_bridge_roles` (empty if the topic has
     no real Hermos endpoint). ``ros2_has_pub`` / ``ros2_has_sub`` are whether

@@ -101,7 +101,7 @@ def _resolve_types(local_state, remote_states) -> dict:
 def decide_bridges(local_state, remote_states) -> list:
     """Return the bridge requests this namespace should issue this tick.
 
-    ``remote_states`` maps ``(host_uuid, ipc_ns_inode)`` to HermosDaemonState.
+    ``remote_states`` maps discovery route keys to bridge-role HermosDaemonState.
     Topics match only within the same domain (a bridge never crosses domains;
     cross-domain relaying is the external domain_bridge's job), and requests are
     collapsed to one per ``(topic, domain, direction)``.
@@ -111,8 +111,9 @@ def decide_bridges(local_state, remote_states) -> list:
     local_by_topic = {(t.topic_name, t.domain_id): t for t in local_state.topics}
     types = _resolve_types(local_state, remote_states)
 
-    for (host_uuid, ipc_ns_inode), remote in remote_states.items():
-        if host_uuid == local_state.host_uuid and ipc_ns_inode == local_state.ipc_ns_inode:
+    for remote in remote_states.values():
+        if (remote.host_uuid == local_state.host_uuid and
+                remote.ipc_ns_inode == local_state.ipc_ns_inode):
             continue
         for remote_topic in remote.topics:
             local_topic = local_by_topic.get((remote_topic.topic_name, remote_topic.domain_id))

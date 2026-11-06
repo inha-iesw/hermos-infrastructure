@@ -50,7 +50,7 @@ def test_ioctl_to_endpoint_copies_all_fields():
         qos_is_reliable=False,
         is_bridge=True,
     )
-    ep = _ioctl_to_endpoint(info, '/chatter', 'pub')
+    ep = _ioctl_to_endpoint(info, '/chatter', 'pub', domain_id=0)
     assert ep.node_name == '/talker_node'
     # No registry provided => pid stays 0.
     assert ep.pid == 0
@@ -62,7 +62,7 @@ def test_ioctl_to_endpoint_copies_all_fields():
 
 def test_ioctl_to_endpoint_handles_short_name():
     info = _make_info('/x')
-    ep = _ioctl_to_endpoint(info, '/chatter', 'pub')
+    ep = _ioctl_to_endpoint(info, '/chatter', 'pub', domain_id=0)
     assert ep.node_name == '/x'
 
 
@@ -71,13 +71,17 @@ def test_ioctl_to_endpoint_fills_pid_from_registry():
     from ros2hermos_discovery_agent.type_registry import RegistryEntry
 
     class FakeRegistry:
-        def lookup(self, topic, role, node):
+        def lookup_type(self, *args, **kwargs):
+            entry = self.lookup(*args, **kwargs)
+            return entry.type_name if entry else ""
+
+        def lookup(self, topic, role, node, domain_id=None, pid=None):
             if (topic, role, node) == ('/chatter', 'pub', '/talker_node'):
                 return RegistryEntry(pid=4242, type_name='std_msgs/msg/Int32')
             return None
 
     info = _make_info('/talker_node')
-    ep = _ioctl_to_endpoint(info, '/chatter', 'pub', FakeRegistry())
+    ep = _ioctl_to_endpoint(info, '/chatter', 'pub', FakeRegistry(), domain_id=0)
     assert ep.pid == 4242
 
 
@@ -87,7 +91,9 @@ def _make_mock_lib(topic_to_endpoints: dict, topic_domains: dict | None = None) 
     ``topic_domains`` optionally maps a topic name to its domain_id (default 0);
     the mock fills the wrapper-owned domain array returned via the out-pointer.
     """
-    lib = MagicMock()
+    lib = MagicMock(spec=[
+        'get_hermos_topics', 'free_hermos_topics', 'free_hermos_topic_domains',
+        'get_hermos_sub_nodes', 'get_hermos_pub_nodes', 'free_hermos_topic_info_ret'])
     topic_domains = topic_domains or {}
 
     topic_names = list(topic_to_endpoints.keys())
@@ -196,7 +202,11 @@ def test_read_local_topics_resolves_type_from_registry():
     lib = _make_mock_lib({'/chatter': {'pub': [pub_info], 'sub': []}})
 
     class FakeRegistry:
-        def lookup(self, topic, role, node):
+        def lookup_type(self, *args, **kwargs):
+            entry = self.lookup(*args, **kwargs)
+            return entry.type_name if entry else ""
+
+        def lookup(self, topic, role, node, domain_id=None, pid=None):
             if (topic, role, node) == ('/chatter', 'pub', '/talker_node'):
                 return RegistryEntry(pid=99, type_name='std_msgs/msg/Int32')
             return None
@@ -205,6 +215,24 @@ def test_read_local_topics_resolves_type_from_registry():
     assert len(topics) == 1
     assert topics[0].type_name == 'std_msgs/msg/Int32'
     assert topics[0].publishers[0].pid == 99
+
+
+@pytest.mark.parametrize('extension', ['', '\t0\t100'])
+def test_real_registry_type_hint_preserves_bridge_type_without_guessing_pid(
+        tmp_path, monkeypatch, extension):
+    from ros2hermos_discovery_agent import type_registry
+
+    monkeypatch.setattr(type_registry, '_process_start_ticks', lambda pid: None)
+    directory = tmp_path / '42'
+    directory.mkdir()
+    (directory / '123.txt').write_text(
+        '/chatter\tstd_msgs/msg/Int32\tpub\t/talker_node' + extension + '\n')
+    registry = type_registry.TypeRegistryReader(42, str(tmp_path))
+    registry.rebuild()
+    lib = _make_mock_lib({'/chatter': {'pub': [_make_info('/talker_node')], 'sub': []}})
+    topic, = read_local_topics(lib, registry)
+    assert topic.type_name == 'std_msgs/msg/Int32'
+    assert topic.publishers[0].pid == 0
 
 
 def test_read_local_topics_falls_back_to_subscriber_type_when_pub_missing():
@@ -220,7 +248,11 @@ def test_read_local_topics_falls_back_to_subscriber_type_when_pub_missing():
     lib = _make_mock_lib({'/chatter': {'pub': [pub_info], 'sub': [sub_info]}})
 
     class SubOnlyRegistry:
-        def lookup(self, topic, role, node):
+        def lookup_type(self, *args, **kwargs):
+            entry = self.lookup(*args, **kwargs)
+            return entry.type_name if entry else ""
+
+        def lookup(self, topic, role, node, domain_id=None, pid=None):
             if (topic, role, node) == ('/chatter', 'sub', '/listener_node'):
                 return RegistryEntry(pid=77, type_name='std_msgs/msg/Int32')
             return None
@@ -303,7 +335,7 @@ def test_main_exits_cleanly_when_claim_is_lost(monkeypatch):
     """
     from ros2hermos_discovery_agent import agent
     fake = _FakeSingletonLib(register_ret=1)
-    monkeypatch.setattr(agent, '_load_ioctl_wrapper', lambda: fake)
+    monkeypatch.setattr(agent, 'load_query_library', lambda: fake)
 
     result = {}
     t = threading.Thread(target=lambda: result.__setitem__('rc', agent.main(argv=[])))
@@ -318,7 +350,7 @@ def test_main_returns_error_when_claim_ioctl_fails(monkeypatch):
     """A register ioctl error (-1) propagates as a non-zero exit, not a silent 0."""
     from ros2hermos_discovery_agent import agent
     fake = _FakeSingletonLib(register_ret=-1)
-    monkeypatch.setattr(agent, '_load_ioctl_wrapper', lambda: fake)
+    monkeypatch.setattr(agent, 'load_query_library', lambda: fake)
     assert agent.main(argv=[]) == 1
 
 
@@ -328,11 +360,11 @@ def test_main_returns_error_when_wrapper_unavailable(monkeypatch):
 
     def _raise_oserror():
         raise OSError('libhermos_ioctl_wrapper.so: cannot open shared object file')
-    monkeypatch.setattr(agent, '_load_ioctl_wrapper', _raise_oserror)
+    monkeypatch.setattr(agent, 'load_query_library', _raise_oserror)
     assert agent.main(argv=[]) == 1
 
     # spec=[] makes any attribute access (the missing symbol) raise AttributeError.
-    monkeypatch.setattr(agent, '_load_ioctl_wrapper', lambda: MagicMock(spec=[]))
+    monkeypatch.setattr(agent, 'load_query_library', lambda: MagicMock(spec=[]))
     assert agent.main(argv=[]) == 1
 
 

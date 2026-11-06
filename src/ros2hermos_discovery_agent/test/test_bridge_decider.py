@@ -44,7 +44,7 @@ def _topic(name, type_name='std_msgs/msg/Int32', pubs=None, subs=None, domain=0)
 
 
 def _state(host_uuid='HOST', ipc_ns=111, topics=None):
-    s = HermosDaemonState()
+    s = HermosDaemonState(device_id='240:0', writer_role=1)
     s.schema_version = 1
     s.host_uuid = host_uuid
     s.ipc_ns_inode = ipc_ns

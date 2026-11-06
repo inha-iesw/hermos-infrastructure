@@ -33,9 +33,9 @@ def test_rebuild_parses_well_formed_lines():
             '/echo\tstd_msgs/msg/String\tsub\t/listener_node\n')
         reader.rebuild()
 
-        assert reader.lookup('/chatter', 'pub', '/talker_node') == RegistryEntry(
+        assert reader.table[('/chatter', 'pub', '/talker_node', None, 1111)] == RegistryEntry(
             pid=1111, type_name='std_msgs/msg/Int32')
-        assert reader.lookup('/echo', 'sub', '/listener_node') == RegistryEntry(
+        assert reader.table[('/echo', 'sub', '/listener_node', None, 1111)] == RegistryEntry(
             pid=1111, type_name='std_msgs/msg/String')
 
 
@@ -45,11 +45,11 @@ def test_rebuild_replaces_previous_table():
         path = os.path.join(reader.ns_dir, '1111.txt')
         _write(path, '/old\tstd_msgs/msg/Int32\tpub\t/n\n')
         reader.rebuild()
-        assert reader.lookup('/old', 'pub', '/n') is not None
+        assert reader.lookup_type('/old', 'pub', '/n', domain_id=0) == 'std_msgs/msg/Int32'
 
         os.unlink(path)
         reader.rebuild()
-        assert reader.lookup('/old', 'pub', '/n') is None
+        assert reader.lookup_type('/old', 'pub', '/n', domain_id=0) == ''
 
 
 def test_rebuild_handles_missing_ns_dir():
@@ -69,9 +69,9 @@ def test_rebuild_skips_unterminated_tail():
             '/partial\tstd_msgs/msg/Float64\tpub')
         reader.rebuild()
 
-        assert reader.lookup('/good', 'pub', '/node_a') is not None
+        assert reader.lookup_type('/good', 'pub', '/node_a', domain_id=0) == 'std_msgs/msg/Int32'
         # The partial line must be dropped.
-        assert reader.lookup('/partial', 'pub', '') is None
+        assert reader.lookup_type('/partial', 'pub', '', domain_id=0) == ''
 
 
 def test_rebuild_skips_lines_with_too_few_fields(caplog):
@@ -83,7 +83,7 @@ def test_rebuild_skips_lines_with_too_few_fields(caplog):
             '/good\tstd_msgs/msg/Int32\tpub\t/node_a\n'
             '/bad\tonly_two_fields\n')
         reader.rebuild()
-        assert reader.lookup('/good', 'pub', '/node_a') is not None
+        assert reader.lookup_type('/good', 'pub', '/node_a', domain_id=0) == 'std_msgs/msg/Int32'
         # No assertion on warning text since logger is optional.
 
 
@@ -95,7 +95,7 @@ def test_rebuild_accepts_extra_fields_forward_compat():
             os.path.join(reader.ns_dir, '7.txt'),
             '/topic\tstd_msgs/msg/Int32\tpub\t/node_a\tfuture_field_v2\tand_one_more\n')
         reader.rebuild()
-        entry = reader.lookup('/topic', 'pub', '/node_a')
+        entry = reader.table[('/topic', 'pub', '/node_a', None, 7)]
         assert entry == RegistryEntry(pid=7, type_name='std_msgs/msg/Int32')
 
 
@@ -106,8 +106,8 @@ def test_rebuild_skips_lines_with_unknown_role():
             os.path.join(reader.ns_dir, '1.txt'),
             '/topic\tstd_msgs/msg/Int32\tunknown_role\t/node_a\n')
         reader.rebuild()
-        assert reader.lookup('/topic', 'unknown_role', '/node_a') is None
-        assert reader.lookup('/topic', 'pub', '/node_a') is None
+        assert reader.lookup_type('/topic', 'unknown_role', '/node_a', domain_id=0) == ''
+        assert reader.lookup_type('/topic', 'pub', '/node_a', domain_id=0) == ''
 
 
 def test_rebuild_records_each_endpoint_independently_for_same_topic():
@@ -132,9 +132,9 @@ def test_rebuild_records_each_endpoint_independently_for_same_topic():
 
         # Each endpoint keeps its own announced type — keyed by node_name,
         # the table is per-endpoint, not per-topic.
-        assert reader.lookup('/conflict_topic', 'pub', '/node_a') == RegistryEntry(
+        assert reader.table[('/conflict_topic', 'pub', '/node_a', None, 1)] == RegistryEntry(
             pid=1, type_name='std_msgs/msg/Int32')
-        assert reader.lookup('/conflict_topic', 'pub', '/node_b') == RegistryEntry(
+        assert reader.table[('/conflict_topic', 'pub', '/node_b', None, 2)] == RegistryEntry(
             pid=2, type_name='std_msgs/msg/String')
 
 

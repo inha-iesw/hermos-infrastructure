@@ -13,6 +13,7 @@ from ros2hermos.discovery import (
     warn_if_gossip_timeout_overridden,
     warn_if_using_fallback,
 )
+from ros2hermos.observation.scope import current_domain, preferred_snapshots
 
 DEFAULT_BRIDGE_TIMEOUT = 10.0   # seconds
 POLL_INTERVAL = 0.2             # seconds between publisher-count checks
@@ -58,7 +59,7 @@ def resolve_type_name(topic_name: str, gossip_timeout: float):
     """Resolve the ROS type string for topic_name.
 
     First checks the live ROS 2 graph for the topic type.  If the topic is not
-    found there, falls back to /_hermos_discovery gossip to resolve the type
+    found there, falls back to /_hermos_discovery_v2 gossip to resolve the type
     for Hermos-only topics.
 
     Returns the type string on success, or None if the type name cannot be
@@ -66,32 +67,32 @@ def resolve_type_name(topic_name: str, gossip_timeout: float):
     """
     with NodeStrategy(None) as proxy_node:
         # First, check if the topic already exists in the ROS 2 graph.
-        type_name = next(
-            (types[0]
-             for name, types in proxy_node.get_topic_names_and_types()
-             if name == topic_name and types),
-            '')
+        type_names = {type_name
+                      for name, types in proxy_node.get_topic_names_and_types()
+                      if name == topic_name for type_name in types if type_name}
 
-        if not type_name:
-            # If not found, fall back to /_hermos_discovery to look up the Hermos topic.
+        if not type_names:
+            # If not found, fall back to /_hermos_discovery_v2 to look up the Hermos topic.
             snapshots, used_fallback = collect_announcements_with_fallback(proxy_node, timeout_sec=gossip_timeout)
             warn_if_using_fallback(proxy_node, used_fallback, gossip_timeout, snapshots)
-            type_name = next(
-                (topic.type_name
-                 for snap in snapshots
-                 for topic in snap.topics
-                 if topic.topic_name == topic_name and topic.type_name),
-                '')
+            selected = preferred_snapshots(snapshots, domain_id=current_domain(proxy_node))
+            type_names = {topic.type_name
+                          for snap in selected for topic in snap.topics
+                          if topic.topic_name == topic_name and topic.type_name}
 
-    if not type_name:
+    if len(type_names) > 1:
+        print(f"ERROR: Conflicting message types for '{topic_name}': "
+              f"{', '.join(sorted(type_names))}. Specify a message type explicitly.")
+        return None
+    if not type_names:
         print(
             "ERROR: Could not resolve message type for '%s'. "
-            'The topic was not found in the ROS 2 graph or via /_hermos_discovery. '
+            'The topic was not found in the ROS 2 graph or via /_hermos_discovery_v2. '
             'Make sure the topic exists and, for Hermos topics, the discovery agent is running.'
             % topic_name)
         return None
 
-    return type_name
+    return next(iter(type_names))
 
 
 @contextlib.contextmanager
@@ -135,7 +136,7 @@ def spawn_bridge_and_run(
 
     # Phase 1: resolve type name.
     # If the caller already supplied a type string (e.g. ros2 topic echo_hermos <topic> <type>),
-    # use it directly; otherwise look it up via the ROS 2 graph or /_hermos_discovery gossip.
+    # use it directly; otherwise look it up via the ROS 2 graph or /_hermos_discovery_v2 gossip.
     if message_type is not None:
         type_name = message_type
     else:

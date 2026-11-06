@@ -19,6 +19,8 @@ def _make_activator() -> A2rBridgeActivator:
     """Return an A2rBridgeActivator with a mock node (no rclpy required)."""
     act = A2rBridgeActivator()
     act._node = MagicMock()
+    act._ctx = MagicMock()
+    act._ctx.get_domain_id.return_value = 0
     return act
 
 
@@ -43,9 +45,10 @@ def _topic(topic_name: str, *, pubs=None, type_name: str = 'std_msgs/msg/String'
     return t
 
 
-def _state(*topics: HermosTopic) -> HermosDaemonState:
-    msg = HermosDaemonState()
-    msg.schema_version = 1
+def _state(*topics: HermosTopic, role=1, session='bridge') -> HermosDaemonState:
+    msg = HermosDaemonState(device_id='240:0', writer_role=role, session_id=session)
+    msg.schema_version = 2
+    msg.lease_duration_ns = 30_000_000_000
     msg.hermos_version = ''
     msg.host_uuid = 'test'
     msg.host_hostname = 'test'
@@ -63,6 +66,20 @@ def test_on_discovery_adds_topic_to_awaiting():
     with patch('ros2hermos._a2r_bridge_activator.load_msg_class', return_value=MagicMock()):
         act._on_discovery(_state(_topic('/chatter', pubs=[_endpoint()])))
     assert '/chatter' in act._awaiting_bridge_topics
+
+
+def test_on_discovery_rejects_unknown_schema_and_foreign_domain():
+    act = _make_activator()
+    invalid = _state(_topic('/bad-schema', pubs=[_endpoint()]))
+    invalid.schema_version = 99
+    foreign = _state(_topic('/other-domain', pubs=[_endpoint()]))
+    foreign.schema_version = 2
+    foreign.domain_id = foreign.topics[0].domain_id = 7
+    foreign.lease_duration_ns = 30_000_000_000
+    with patch('ros2hermos._a2r_bridge_activator.load_msg_class', return_value=MagicMock()):
+        act._on_discovery(invalid)
+        act._on_discovery(foreign)
+    assert not act._active_subs
 
 
 def test_on_discovery_skips_hermos_srv_topics():
@@ -85,6 +102,40 @@ def test_on_discovery_does_not_duplicate_subscription():
         act._on_discovery(_state(_topic('/chatter', pubs=[_endpoint()])))
         act._on_discovery(_state(_topic('/chatter', pubs=[_endpoint()])))
     assert act._node.create_subscription.call_count == 1
+
+
+def test_observer_cannot_revive_a_topic_absent_from_live_bridge(monkeypatch):
+    act = _make_activator()
+    monkeypatch.setattr('ros2hermos._a2r_bridge_activator.time.monotonic', lambda: 1.0)
+    act._on_discovery(_state())
+    observer = _state(_topic('/removed', pubs=[_endpoint()]), role=2, session='observer')
+    with patch('ros2hermos._a2r_bridge_activator.load_msg_class', return_value=MagicMock()):
+        act._on_discovery(observer)
+        assert not act._active_subs
+        # Fresh observer metadata becomes usable after the bridge's lease ends.
+        monkeypatch.setattr('ros2hermos._a2r_bridge_activator.time.monotonic', lambda: 31.0)
+        act._on_discovery(observer)
+    assert '/removed' in act._active_subs
+
+
+def test_preferred_empty_inventory_keeps_existing_recording_subscription():
+    act = _make_activator()
+    with patch('ros2hermos._a2r_bridge_activator.load_msg_class', return_value=MagicMock()):
+        act._on_discovery(_state(
+            _topic('/recording', pubs=[_endpoint()]), role=2, session='observer'))
+        act._on_discovery(_state())
+    assert '/recording' in act._active_subs
+    assert act._node.create_subscription.call_count == 1
+
+
+def test_empty_bridge_inventory_does_not_hide_another_devices_observer():
+    act = _make_activator()
+    act._on_discovery(_state())
+    observer = _state(_topic('/camera', pubs=[_endpoint()]), role=2, session='observer')
+    observer.device_id = '241:0'
+    with patch('ros2hermos._a2r_bridge_activator.load_msg_class', return_value=MagicMock()):
+        act._on_discovery(observer)
+    assert '/camera' in act._active_subs
 
 
 def test_on_discovery_skips_when_load_msg_class_returns_none():

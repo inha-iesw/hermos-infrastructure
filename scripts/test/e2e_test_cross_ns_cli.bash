@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # E2E regression smoke test for the ros2hermos CLI verbs after they
-# learned to subscribe to /_hermos_discovery and merge cross-NS /
+# learned to subscribe to /_hermos_discovery_v2 and display cross-NS /
 # cross-ECU state.
 #
 # This script does not actually create multiple IPC namespaces (that
@@ -10,7 +10,7 @@
 #
 #   * Each verb accepts `--gossip-timeout`.
 #   * Each verb finishes without raising when the daemon is publishing.
-#   * Local Hermos endpoints surface in the CLI output.
+#   * Local Hermos endpoints surface with their v2 source scope and PID.
 #
 # `collect_announcements()` returns every NS's snapshot including the
 # caller's own, so in this single-NS run the local agent's gossip is what
@@ -66,7 +66,7 @@ trap cleanup EXIT
 yellow "Starting hermos_discovery_agent and talker..."
 ros2 run ros2hermos_discovery_agent discovery_agent > "$LOG_DIR/agent.log" 2>&1 &
 sleep "$DAEMON_WARMUP_SEC"
-ros2 launch hermos_sample_application talker.launch.xml > "$LOG_DIR/talker.log" 2>&1 &
+ros2 launch hermos_sample_application talker.launch.xml discovery_agent:=false > "$LOG_DIR/talker.log" 2>&1 &
 sleep "$TALKER_WARMUP_SEC"
 
 if ! grep -q "discovery_agent up" "$LOG_DIR/agent.log"; then
@@ -91,6 +91,8 @@ grep -q -- "/my_topic" <<<"$out" \
     || fail "topic list_hermos did not include /my_topic" "$out"
 grep -- "/my_topic" <<<"$out" | grep -q "Hermos enabled" \
     || fail "/my_topic present but missing '(Hermos enabled)' annotation" "$out"
+grep -qE "^/my_topic .*\\[host=.+ ipc=[0-9]+ domain=${ROS_DOMAIN_ID:-0} device=[0-9]+:[0-9]+ session=.+\\]$" <<<"$out" \
+    || fail "/my_topic missing its v2 source scope" "$out"
 green "✓ topic list_hermos"
 
 # ----- node list_hermos -----
@@ -98,6 +100,8 @@ out=$(ros2 node list_hermos --gossip-timeout "$GOSSIP_TIMEOUT" 2>&1) \
     || fail "node list_hermos exited non-zero" "$out"
 grep -q -- "/talker_node" <<<"$out" \
     || fail "node list_hermos did not include /talker_node" "$out"
+grep -qE "^/talker_node .*\\[host=.+ ipc=[0-9]+ domain=${ROS_DOMAIN_ID:-0} device=[0-9]+:[0-9]+ session=.+\\]$" <<<"$out" \
+    || fail "/talker_node missing its v2 source scope" "$out"
 green "✓ node list_hermos"
 
 # ----- topic info_hermos -----
@@ -105,6 +109,8 @@ out=$(ros2 topic info_hermos /my_topic --gossip-timeout "$GOSSIP_TIMEOUT" 2>&1) 
     || fail "topic info_hermos exited non-zero" "$out"
 grep -qE "Hermos Publisher count:\s*1" <<<"$out" \
     || fail "topic info_hermos did not report 1 Hermos publisher" "$out"
+grep -qE "^HERM0S host=.+ ipc=[0-9]+ domain=${ROS_DOMAIN_ID:-0} device=[0-9]+:[0-9]+ session=.+$" <<<"$out" \
+    || fail "topic info_hermos missing its v2 source scope" "$out"
 green "✓ topic info_hermos"
 
 # ----- node info_hermos -----
@@ -112,6 +118,10 @@ out=$(ros2 node info_hermos /talker_node --gossip-timeout "$GOSSIP_TIMEOUT" 2>&1
     || fail "node info_hermos exited non-zero" "$out"
 grep -q -- "/my_topic" <<<"$out" \
     || fail "node info_hermos /talker_node did not list /my_topic" "$out"
+grep -qE "^HERM0S host=.+ ipc=[0-9]+ domain=${ROS_DOMAIN_ID:-0} device=[0-9]+:[0-9]+ session=.+$" <<<"$out" \
+    || fail "node info_hermos missing its v2 source scope" "$out"
+grep -qE '^PIDs: [1-9][0-9]*(, [1-9][0-9]*)*$' <<<"$out" \
+    || fail "node info_hermos missing a positive native PID" "$out"
 green "✓ node info_hermos"
 
 green ""

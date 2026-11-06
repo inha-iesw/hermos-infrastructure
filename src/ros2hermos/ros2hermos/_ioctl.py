@@ -1,83 +1,27 @@
-"""ioctl fallback: synthesise an HermosDaemonState for the caller's NS."""
+"""Read-only local metadata using the discovery agent's domain-aware reader."""
 
-from contextlib import contextmanager
-import ctypes
 import os
 from typing import Optional
 import uuid
 
-from ros2hermos_discovery_msgs.msg import (
-    HermosDaemonState,
-    HermosEndpoint,
-    HermosTopic,
-)
+from ros2hermos_discovery_agent.agent import load_query_library, read_local_topics
+from ros2hermos_discovery_agent.type_registry import TypeRegistryReader, _default_base_dir
+from ros2hermos_discovery_msgs.msg import HermosDaemonState
+from ros2hermos_discovery_agent.observation.protocol import local_device_id, make_snapshot, WRITER_OBSERVER
+
+from ros2hermos.observation.scope import current_domain
 
 
 BOOT_ID_PATH = '/proc/sys/kernel/random/boot_id'
 SELF_IPC_NS_PATH = '/proc/self/ns/ipc'
 
 
-class _TopicInfoRet(ctypes.Structure):
-    _fields_ = [
-        ('node_name', ctypes.c_char * 256),
-        ('qos_depth', ctypes.c_uint32),
-        ('qos_is_transient_local', ctypes.c_bool),
-        ('qos_is_reliable', ctypes.c_bool),
-        ('is_bridge', ctypes.c_bool),
-    ]
-
-
-def _load_lib() -> Optional[ctypes.CDLL]:
-    """Return the ioctl wrapper CDLL, or None if its shared library is missing.
-
-    This does not depend on the kmod: when the library loads but the kmod is
-    absent, the ioctls still succeed and simply return empty results.
-    """
+def _load_lib():
+    """Load the shared read-only query bindings, or report unavailable ABI."""
     try:
-        lib = ctypes.CDLL('libhermos_ioctl_wrapper.so')
-    except OSError:
+        return load_query_library(registration=False)
+    except (OSError, AttributeError):
         return None
-    lib.get_hermos_topics.argtypes = [
-        ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.POINTER(ctypes.c_uint32))]
-    lib.get_hermos_topics.restype = ctypes.POINTER(ctypes.POINTER(ctypes.c_char))
-    lib.free_hermos_topics.argtypes = [
-        ctypes.POINTER(ctypes.POINTER(ctypes.c_char)), ctypes.c_int]
-    lib.free_hermos_topics.restype = None
-    lib.get_hermos_sub_nodes.argtypes = [
-        ctypes.c_char_p, ctypes.POINTER(ctypes.c_int), ctypes.c_uint32]
-    lib.get_hermos_sub_nodes.restype = ctypes.POINTER(_TopicInfoRet)
-    lib.get_hermos_pub_nodes.argtypes = [
-        ctypes.c_char_p, ctypes.POINTER(ctypes.c_int), ctypes.c_uint32]
-    lib.get_hermos_pub_nodes.restype = ctypes.POINTER(_TopicInfoRet)
-    lib.free_hermos_topic_info_ret.argtypes = [ctypes.POINTER(_TopicInfoRet)]
-    lib.free_hermos_topic_info_ret.restype = None
-    return lib
-
-
-def _endpoint_from_topic_info_ret(tir: _TopicInfoRet) -> HermosEndpoint:
-    ep = HermosEndpoint()
-    ep.node_name = tir.node_name.decode('utf-8').rstrip('\x00')
-    ep.pid = 0
-    ep.qos_depth = tir.qos_depth
-    ep.qos_is_transient_local = tir.qos_is_transient_local
-    ep.qos_is_reliable = tir.qos_is_reliable
-    ep.is_bridge = tir.is_bridge
-    return ep
-
-
-@contextmanager
-def _endpoints(lib, fn, topic_name: str, domain_id: int = 0):
-    """Yield a list[HermosEndpoint] for one topic; free the ctypes buffer on exit."""
-    count = ctypes.c_int()
-    arr = fn(topic_name.encode('utf-8'), ctypes.byref(count), domain_id)
-    try:
-        if not arr:
-            yield []
-            return
-        yield [_endpoint_from_topic_info_ret(arr[i]) for i in range(count.value)]
-    finally:
-        if arr:
-            lib.free_hermos_topic_info_ret(arr)
 
 
 def _local_host_uuid() -> str:
@@ -92,39 +36,25 @@ def _local_ipc_ns_inode() -> int:
     return os.stat(SELF_IPC_NS_PATH).st_ino
 
 
-def self_ns_snapshot() -> Optional[HermosDaemonState]:
-    """Build a snapshot from ioctl, or None if the wrapper is unavailable."""
+def self_ns_snapshot(domain_id=None) -> Optional[HermosDaemonState]:
+    """Query one domain in this IPC namespace without registering a peer.
+
+    An absent wrapper returns None. A standalone local query cannot identify a
+    supervisor epoch and leaves session_id unknown unless supplied by runtime.
+    Registry rebuilding is read-only; cleanup belongs to the discovery agent.
+    """
     lib = _load_lib()
     if lib is None:
         return None
-
-    state = HermosDaemonState()
-    state.schema_version = 1
-    state.hermos_version = ''
-    state.host_uuid = _local_host_uuid()
-    state.host_hostname = ''
-    state.ipc_ns_inode = _local_ipc_ns_inode()
-    state.topics = []
-
-    topic_count = ctypes.c_int()
-    # TODO: make the CLI domain-aware. It currently queries only the default
-    # domain (0) -- pass a real domain_ids array here and use each topic's
-    # stamped domain for get_hermos_{pub,sub}_nodes below, instead of
-    # hardcoding 0. For now we only keep the ABI in sync.
-    topic_array = lib.get_hermos_topics(ctypes.byref(topic_count), None)
-    try:
-        for i in range(topic_count.value):
-            tname = ctypes.cast(topic_array[i], ctypes.c_char_p).value.decode('utf-8')
-            t = HermosTopic()
-            t.topic_name = tname
-            t.type_name = ''
-            t.domain_id = 0
-            with _endpoints(lib, lib.get_hermos_pub_nodes, tname, 0) as pubs:
-                t.publishers = pubs
-            with _endpoints(lib, lib.get_hermos_sub_nodes, tname, 0) as subs:
-                t.subscribers = subs
-            state.topics.append(t)
-    finally:
-        if topic_count.value != 0:
-            lib.free_hermos_topics(topic_array, topic_count)
-    return state
+    domain_id = current_domain() if domain_id is None else domain_id
+    ipc_ns_inode = _local_ipc_ns_inode()
+    registry = TypeRegistryReader(ipc_ns_inode, base_dir=_default_base_dir())
+    registry.rebuild()
+    topics = read_local_topics(lib, registry=registry, own_domain_id=domain_id)
+    return make_snapshot(
+        host_uuid=_local_host_uuid(), hostname=os.uname().nodename,
+        ipc_ns_inode=ipc_ns_inode, domain_id=domain_id,
+        device_id=local_device_id(),
+        session_id=os.environ.get('HERMOS_SESSION_ID', ''),
+        writer_role=WRITER_OBSERVER,
+        topics=topics)

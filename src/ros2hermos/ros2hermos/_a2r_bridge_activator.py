@@ -10,11 +10,13 @@ from rclpy.logging import LoggingSeverity
 
 from ros2hermos.bridge_utils import create_dummy_subscription, load_msg_class
 from ros2hermos.discovery import GOSSIP_TOPIC, gossip_qos
+from ros2hermos.observation.scope import SnapshotCache
 from ros2hermos_discovery_msgs.msg import HermosDaemonState
+from ros2hermos_discovery_agent.observation.protocol import latest_per_route, route_key
 
 
 class A2rBridgeActivator:
-    """Watch /_hermos_discovery and spawn dummy ROS2 subscriptions to activate A2R bridges.
+    """Watch /_hermos_discovery_v2 and spawn dummy ROS2 subscriptions to activate A2R bridges.
 
     One dummy subscription per unique topic_name is created on first discovery and kept
     alive for the lifetime of this object, so that:
@@ -46,6 +48,7 @@ class A2rBridgeActivator:
         self._thread = None
         self._gossip_sub = None
         self._timer = None
+        self._snapshots = SnapshotCache()
         self._active_subs: dict = {}             # topic_name -> Subscription
         self._awaiting_bridge_topics: dict = {}   # topic_name -> monotonic time, until confirmed or timed out
         self._log_level = log_level
@@ -92,6 +95,16 @@ class A2rBridgeActivator:
     def _on_discovery(self, msg: HermosDaemonState) -> None:
         # No lock needed: both _on_discovery and _check_bridges are called from the same
         # SingleThreadedExecutor spin thread, so they never execute concurrently.
+        if msg.domain_id != self._ctx.get_domain_id():
+            return
+        now = time.monotonic()
+        try:
+            self._snapshots.update(msg, received_at=now)
+        except ValueError:
+            return
+        selected = latest_per_route(self._snapshots.active(now=now).received())
+        if selected.get(route_key(msg)) is not msg:
+            return
         for topic in msg.topics:
             if topic.topic_name.startswith('/HERMOS_SRV_'):
                 continue

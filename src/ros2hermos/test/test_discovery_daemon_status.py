@@ -6,10 +6,68 @@ logic are exercised here with tmp dirs and patched checks.
 
 import os
 import tempfile
+from types import SimpleNamespace
 from argparse import Namespace
 from unittest.mock import MagicMock, patch
+import pytest
 
 from ros2hermos.verb import hermos_discovery_daemon_status as ds
+
+
+@pytest.fixture(autouse=True)
+def selected_device(monkeypatch):
+    monkeypatch.setattr(ds, 'local_device_id', lambda: '240:0')
+
+
+@pytest.mark.parametrize('host,ipc,domain,role,expected', [
+    ('host', 42, 7, 1, True),
+    ('host', 42, 7, 2, False),
+    ('other-host', 42, 7, 1, False),
+    ('host', 99, 7, 1, False),
+    ('host', 42, 8, 1, False),
+])
+def test_gossip_requires_local_bridge_writer(host, ipc, domain, role, expected):
+    state = SimpleNamespace(host_uuid=host, ipc_ns_inode=ipc, domain_id=domain,
+                            device_id='240:0', writer_role=role)
+    with patch.object(ds, 'NodeStrategy', MagicMock()), \
+            patch.object(ds, '_local_host_uuid', return_value='host'), \
+            patch.object(ds, 'collect_announcements', return_value=[state]):
+        result, _ = ds._check_gossip(42, 7, 0.1)
+    assert result is expected
+
+
+def test_bridge_on_another_device_cannot_satisfy_status():
+    state = SimpleNamespace(host_uuid='host', ipc_ns_inode=42, domain_id=7,
+                            device_id='241:0', writer_role=1)
+    with patch.object(ds, 'NodeStrategy', MagicMock()), \
+            patch.object(ds, '_local_host_uuid', return_value='host'), \
+            patch.object(ds, 'collect_announcements', return_value=[state]):
+        result, _ = ds._check_gossip(42, 7, 0.1)
+    assert result is False
+
+
+def test_missing_device_identity_makes_gossip_unverifiable():
+    with patch.object(ds, '_local_host_uuid', return_value='host'), \
+            patch.object(ds, 'local_device_id', side_effect=OSError('device missing')), \
+            patch.object(ds, 'collect_announcements') as collect:
+        result, reason = ds._check_gossip(42, 7, 0.1)
+    assert result is None
+    assert 'device identity unavailable' in reason
+    collect.assert_not_called()
+
+
+def test_observer_cannot_hide_a_registered_bridge_agent_that_stopped_publishing(capsys):
+    state = SimpleNamespace(host_uuid='host', ipc_ns_inode=42, domain_id=7,
+                            device_id='240:0', writer_role=2)
+    with patch.object(ds, 'NodeStrategy', MagicMock()), \
+            patch.object(ds, '_self_ipc_ns_inode', return_value=42), \
+            patch.object(ds, '_read_ros_domain_id', return_value=7), \
+            patch.object(ds, '_local_host_uuid', return_value='host'), \
+            patch.object(ds, '_check_daemon_process', return_value=(True, 'registered')), \
+            patch.object(ds, 'collect_announcements', return_value=[state]):
+        result = ds.DiscoveryDaemonStatusVerb().main(args=Namespace(gossip_timeout=2.0, verbose=False))
+    assert result == 1
+    assert 'running but not publishing' in capsys.readouterr().out
 
 
 # --- type_registry: informational description (no OK/NG) --------------------
@@ -109,6 +167,21 @@ def test_read_ros_domain_id(monkeypatch):
     assert ds._read_ros_domain_id() == 0
 
 
+@pytest.mark.parametrize('raw', ['-1', '4294967296'])
+def test_status_domain_does_not_wrap_invalid_values_into_another_domain(monkeypatch, raw):
+    monkeypatch.setenv('ROS_DOMAIN_ID', raw)
+    assert ds._read_ros_domain_id() == 0
+
+
+def test_missing_boot_id_makes_gossip_unverifiable():
+    with patch.object(ds, '_local_host_uuid', return_value=''), \
+            patch.object(ds, 'collect_announcements') as collect:
+        result, reason = ds._check_gossip(42, 7, 0.1)
+    assert result is None
+    assert 'host boot UUID' in reason
+    collect.assert_not_called()
+
+
 def test_type_registry_base_honors_hermos_tmpfs_dir(monkeypatch):
     """`HERMOS_TMPFS_DIR` overrides the `/dev/shm` default consistently with the writer."""
     monkeypatch.setenv('HERMOS_TMPFS_DIR', '/run/custom')
@@ -141,7 +214,7 @@ def _run_main(proc, gossip, verbose=False):
 
 def test_verdict_running(capsys):
     rc = _run_main(proc=(True, 'registered in the kmod (domain 0)'),
-                   gossip=(True, 'snapshot received on /_hermos_discovery'))
+                   gossip=(True, 'snapshot received on /_hermos_discovery_v2'))
     out = capsys.readouterr().out
     assert rc == 0
     assert 'OK. The discovery agent is running.' in out
@@ -158,24 +231,35 @@ def test_verdict_not_running_skips_gossip(capsys):
 
 def test_verdict_running_but_not_publishing(capsys):
     rc = _run_main(proc=(True, 'registered in the kmod (domain 0)'),
-                   gossip=(False, 'no snapshot on /_hermos_discovery within 3.0s'))
+                   gossip=(False, 'no snapshot on /_hermos_discovery_v2 within 3.0s'))
     out = capsys.readouterr().out
     assert rc == 1
     assert 'running but not publishing' in out
     assert 'no snapshot' not in out  # reason is --verbose only
 
 
+def test_verdict_distinguishes_unverifiable_publication(capsys):
+    rc = _run_main(proc=(True, 'registered'),
+                   gossip=(None, 'local host boot UUID unavailable'), verbose=True)
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert 'publication could not be verified' in out
+    assert 'host boot UUID unavailable' in out
+    assert 'not publishing' not in out
+    assert 'agent not running' not in out
+
+
 def test_default_output_is_verdict_only(capsys):
     """Default output carries no inode header, type_registry, or per-check reason."""
     _run_main(proc=(True, 'registered in the kmod (domain 0)'),
-              gossip=(True, 'snapshot received on /_hermos_discovery'))
+              gossip=(True, 'snapshot received on /_hermos_discovery_v2'))
     out = capsys.readouterr().out
     assert out.strip() == 'OK. The discovery agent is running.'
 
 
 def test_verbose_shows_inode_checks_and_type_registry(capsys):
     rc = _run_main(proc=(True, 'registered in the kmod (domain 0)'),
-                   gossip=(True, 'snapshot received on /_hermos_discovery'), verbose=True)
+                   gossip=(True, 'snapshot received on /_hermos_discovery_v2'), verbose=True)
     out = capsys.readouterr().out
     assert rc == 0
     assert 'IPC namespace inode: 4026531839' in out

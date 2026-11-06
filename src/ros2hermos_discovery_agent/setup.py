@@ -1,15 +1,15 @@
-from setuptools import setup
+from setuptools import find_packages, setup
 
 package_name = 'ros2hermos_discovery_agent'
 
 setup(
     name=package_name,
     version='2.3.5',
-    packages=[package_name],
+    packages=find_packages(exclude=['test', 'test.*']),
     data_files=[
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
-        ('share/' + package_name, ['package.xml']),
+        ('share/' + package_name, ['package.xml', 'README.md']),
         ('share/' + package_name + '/launch', ['launch/discovery_agent.launch.xml']),
         ('share/' + package_name + '/systemd',
             ['systemd/hermos-domain-bridge.service.example', 'systemd/README.md']),
@@ -25,7 +25,7 @@ setup(
         'koichi.imai.2@tier4.jp, primenumber_2_3_5@yahoo.co.jp'
     ),
     description='Per-IPC-namespace daemon publishing Hermos state on '
-                '/_hermos_discovery for cross-NS/ECU observability and bridge generation.',
+                '/_hermos_discovery_v2 for cross-NS/ECU observability and bridge generation.',
     license='Apache License 2.0',
     entry_points={
         'console_scripts': [

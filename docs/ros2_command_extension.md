@@ -16,7 +16,7 @@ If a topic is Hermos enabled, it will be shown with a "(Hermos enabled)" suffix.
 ```bash
 $ ros2 topic list_hermos
 /topic_name1
-/topic_name2 (Hermos enabled)
+/topic_name2 (Hermos enabled) [host=boot-uuid ipc=4026531839 domain=0 device=240:0 session=agent-uuid]
 /topic_name3
 ```
 
@@ -24,21 +24,23 @@ If you want to get only Hermos related topics, use `ros2 topic list_hermos | gre
 
 ```bash
 $ ros2 topic list_hermos | grep Hermos
-/topic_name2 (Hermos enabled)
+/topic_name2 (Hermos enabled) [host=boot-uuid ipc=4026531839 domain=0 device=240:0 session=agent-uuid]
 ```
 
 If an Hermos topic is bridged to ROS 2 publishers or subscribers, it is shown with the "(Hermos enabled, bridged)" suffix.
 
 ```bash
 $ ros2 topic list_hermos
-/topic_name1 (Hermos enabled)
-/topic_name2 (Hermos enabled, bridged)
+/topic_name1 (Hermos enabled) [host=boot-uuid ipc=4026531839 domain=0 device=240:0 session=agent-uuid]
+/topic_name2 (Hermos enabled, bridged) [host=boot-uuid ipc=4026531839 domain=0 device=240:0 session=agent-uuid]
 /topic_name3
 ```
 
 This does not necessarily mean that a bridge process is currently running. If there is only one Hermos publisher and no ROS 2 subscriber, the topic will be displayed simply as "(Hermos enabled)" rather than including the "bridged" suffix. The "bridged" status indicates that communication has been successfully established between Hermos and ROS 2.
 
 #### Table 1: Pub/Sub situations and display names
+
+The table omits the native scope suffix for readability.
 
 | pub | sub | bridge | display |
 | :--- | :--- | :--- | :--- |
@@ -61,6 +63,7 @@ To show the topic info including Hermos, use `ros2 topic info_hermos /topic_name
 
 ```bash
 $ ros2 topic info_hermos /my_topic
+HERM0S host=boot-uuid ipc=4026531839 domain=0 device=240:0 session=agent-uuid
 Type: hermos_sample_interfaces/msg/DynamicSizeArray
 ROS 2 Publisher count: 0
 Hermos Publisher count: 1
@@ -72,6 +75,7 @@ For more details, use `--verbose` or `-v`.
 
 ```bash
 $ ros2 topic info_hermos /my_topic -v
+HERM0S host=boot-uuid ipc=4026531839 domain=0 device=240:0 session=agent-uuid
 Type: hermos_sample_interfaces/msg/DynamicSizeArray
 
 ROS 2 Publisher count: 0
@@ -79,9 +83,11 @@ Hermos Publisher count: 1
 
 Node name: talker_node
 Node namespace: /
+PID: 86051
 Topic type: hermos_sample_interfaces/msg/DynamicSizeArray
 Endpoint type: PUBLISHER (Hermos enabled)
 QoS profile:
+  Reliability: unknown (native publisher does not expose this QoS)
   History (Depth): KEEP_LAST (1)
   Durability: VOLATILE
 
@@ -90,9 +96,11 @@ Hermos Subscription count: 1
 
 Node name: listener_node
 Node namespace: /
+PID: 86052
 Topic type: hermos_sample_interfaces/msg/DynamicSizeArray
 Endpoint type: SUBSCRIPTION (Hermos enabled)
 QoS profile:
+  Reliability: BEST_EFFORT
   History (Depth): KEEP_LAST (1)
   Durability: VOLATILE
 ```
@@ -103,6 +111,7 @@ By default, `ros2 topic info_hermos` hides internal bridge nodes and endpoints t
 
 ```bash
 $ ros2 topic info_hermos /my_topic -d
+HERM0S host=boot-uuid ipc=4026531839 domain=0 device=240:0 session=agent-uuid
 Type: hermos_sample_interfaces/msg/DynamicSizeArray
 ROS 2 Publisher count: 1
 Hermos Publisher count: 2
@@ -114,6 +123,7 @@ You can combine `-d` with `-v` for full verbose output including bridge node det
 
 ```bash
 $ ros2 topic info_hermos /my_topic -v -d
+HERM0S host=boot-uuid ipc=4026531839 domain=0 device=240:0 session=agent-uuid
 Type: hermos_sample_interfaces/msg/DynamicSizeArray
 
 ROS 2 Publisher count: 1
@@ -135,17 +145,21 @@ QoS profile:
 
 Node name: hermos_bridge_node_86050
 Node namespace: /
+PID: 86050
 Topic type: hermos_sample_interfaces/msg/DynamicSizeArray
 Endpoint type: PUBLISHER (Hermos enabled)
 QoS profile:
+  Reliability: unknown (native publisher does not expose this QoS)
   History (Depth): KEEP_LAST (10)
   Durability: TRANSIENT_LOCAL
 
 Node name: talker_node
 Node namespace: /
+PID: 86051
 Topic type: hermos_sample_interfaces/msg/DynamicSizeArray
 Endpoint type: PUBLISHER (Hermos enabled)
 QoS profile:
+  Reliability: unknown (native publisher does not expose this QoS)
   History (Depth): KEEP_LAST (1)
   Durability: VOLATILE
 
@@ -168,17 +182,21 @@ QoS profile:
 
 Node name: listener_node
 Node namespace: /
+PID: 86052
 Topic type: hermos_sample_interfaces/msg/DynamicSizeArray
 Endpoint type: SUBSCRIPTION (Hermos enabled)
 QoS profile:
+  Reliability: BEST_EFFORT
   History (Depth): KEEP_LAST (1)
   Durability: VOLATILE
 
 Node name: hermos_bridge_node_86050
 Node namespace: /
+PID: 86050
 Topic type: hermos_sample_interfaces/msg/DynamicSizeArray
 Endpoint type: SUBSCRIPTION (Hermos enabled)
 QoS profile:
+  Reliability: RELIABLE
   History (Depth): KEEP_LAST (1)
   Durability: VOLATILE
 ```
@@ -187,12 +205,13 @@ QoS profile:
 
 To list all nodes including those implemented with Hermos, use `ros2 node list_hermos`.
 
-Standard ROS 2 nodes are displayed normally, while `hermos::Node` instances are marked with the "(Hermos enabled)" suffix.
+Standard ROS 2 nodes are displayed normally, while native nodes are marked with "(Hermos enabled)" and their scope. A name also present in the DDS graph is marked "(Hermos enabled, DDS)"; this does not establish that both endpoints belong to the same process.
 
 ```bash
 $ ros2 node list_hermos
 /ros2_talker_node
-/hermos_listener_node (Hermos enabled)
+/hermos_listener_node (Hermos enabled) [host=boot-uuid ipc=4026531839 domain=0 device=240:0 session=agent-uuid]
+/mixed_node (Hermos enabled, DDS) [host=boot-uuid ipc=4026531839 domain=0 device=240:0 session=agent-uuid]
 ```
 
 #### Debug Mode
@@ -202,13 +221,16 @@ By default, `ros2 node list_hermos` hides internal bridge nodes and endpoints to
 ```bash
 $ ros2 node list_hermos -d
 /ros2_talker_node
-/hermos_bridge_node_86050
-/hermos_listener_node (Hermos enabled)
+/hermos_bridge_node_86050 (Hermos enabled, DDS) [host=boot-uuid ipc=4026531839 domain=0 device=240:0 session=agent-uuid]
+/hermos_listener_node (Hermos enabled) [host=boot-uuid ipc=4026531839 domain=0 device=240:0 session=agent-uuid]
+/mixed_node (Hermos enabled, DDS) [host=boot-uuid ipc=4026531839 domain=0 device=240:0 session=agent-uuid]
 ```
 
 #### Notes
 
 Detection of hermos::Node instances depends on the presence of Hermos-enabled endpoints. A node without at least one Hermos publisher or subscriber will be omitted from the output.
+
+`ros2 node list_hermos -c` counts displayed rows after filtering. The same node name in two native scopes contributes two rows; the result is not a unique-name or process count.
 
 ### Node Info
 
@@ -216,9 +238,11 @@ To show the node info including Hermos, use `ros2 node info_hermos /node_name`.
 
 ```bash
 $ ros2 node info_hermos /listener_node
+HERM0S host=boot-uuid ipc=4026531839 domain=0 device=240:0 session=agent-uuid
+PIDs: 86052
   Subscribers:
     /parameter_events: rcl_interfaces/msg/ParameterEvent
-    /my_topic: hermos_sample_interfaces/msg/DynamicSizeArray (Hermos enabled, bridged)
+    /my_topic: DDS=hermos_sample_interfaces/msg/DynamicSizeArray; HERM0S=hermos_sample_interfaces/msg/DynamicSizeArray (Hermos enabled, bridged)
   Publishers:
     /my_topic2: hermos_sample_interfaces/msg/DynamicSizeArray (Hermos enabled)
     /parameter_events: rcl_interfaces/msg/ParameterEvent

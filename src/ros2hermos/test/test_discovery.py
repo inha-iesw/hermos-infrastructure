@@ -51,7 +51,7 @@ def _topic(topic_name: str, *, pubs=None, subs=None, type_name: str = '') -> Her
 
 
 def _state(host: str, ipc_ns: int, *, topics=None) -> HermosDaemonState:
-    state = HermosDaemonState()
+    state = HermosDaemonState(device_id='240:0', writer_role=1)
     state.schema_version = 1
     state.hermos_version = ''
     state.host_uuid = host
@@ -215,7 +215,7 @@ def test_warn_if_using_fallback_says_no_agent_when_dds_sees_no_publisher(capsys)
         snapshots=[_state('h', 1, topics=[_topic('/chatter')])])
     err = capsys.readouterr().err
     assert 'NOTE' in err
-    assert 'no /_hermos_discovery agent visible' in err
+    assert 'no /_hermos_discovery_v2 agent visible' in err
 
 
 def test_warn_if_using_fallback_silent_when_no_publisher_and_no_local_state(capsys):

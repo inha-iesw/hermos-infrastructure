@@ -5,7 +5,7 @@
   <version>2.3.5</version>
   <description>
     Per-IPC-namespace daemon that reads the local Hermos state via the
-    existing NS-scoped ioctl and publishes it on /_hermos_discovery so
+    existing NS-scoped ioctl and publishes it on /_hermos_discovery_v2 so
     other namespaces and ECUs running ros2hermos tooling can build a
     cross-NS / cross-ECU view and request bridges on demand.
   </description>

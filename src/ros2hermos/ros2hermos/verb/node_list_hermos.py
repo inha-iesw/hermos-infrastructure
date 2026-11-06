@@ -8,11 +8,11 @@ from ros2topic.verb import VerbExtension
 from ros2hermos.discovery import (
     add_gossip_timeout_arg,
     all_nodes,
-    collect_announcements_with_fallback,
     is_internal_node_name,
     warn_if_gossip_timeout_overridden,
-    warn_if_using_fallback,
 )
+from ros2hermos.observation.cli import add_scope_arguments, collect_for_args, scopes_for_args
+from ros2hermos.observation.scope import scope_label
 
 def split_fqn(fqn):
     namespace, _, name = fqn.rpartition('/')
@@ -34,13 +34,16 @@ class ListHermosVerb(VerbExtension):
             help='Include internal nodes (domain bridge, CIE thread configurator, '
                  'discovery agent) in the output')
         add_gossip_timeout_arg(parser)
+        add_scope_arguments(parser)
 
     def main(self, *, args):
         warn_if_gossip_timeout_overridden(args)
         with NodeStrategy(None) as node:
-            snapshots, used_fallback = collect_announcements_with_fallback(
-                node, timeout_sec=args.gossip_timeout)
-            warn_if_using_fallback(node, used_fallback, args.gossip_timeout, snapshots)
+            try:
+                scopes = scopes_for_args(collect_for_args(node, args), node, args)
+            except ValueError as exc:
+                return str(exc)
+            snapshots = [state for _, state in scopes]
 
             # Get node names which contains Hermos topics from gossip.
             hermos_node_name = all_nodes(snapshots)
@@ -91,13 +94,16 @@ class ListHermosVerb(VerbExtension):
             merged_node_name = hermos_node_name | ros2_node_name
             if not args.all and not args.debug:
                 merged_node_name = {node for node in merged_node_name if not is_internal_node_name(node)}
+            rows = []
+            for node_name in sorted(merged_node_name):
+                if node_name in ros2_node_name and node_name not in hermos_node_name:
+                    rows.append(node_name)
+                for scope, state in scopes:
+                    if node_name in all_nodes([state]):
+                        label = 'Hermos enabled, DDS' if node_name in ros2_node_name else 'Hermos enabled'
+                        rows.append(f'{node_name} ({label}) [{scope_label(scope)}]')
             if args.count_nodes:
-                total_nodes = len(merged_node_name)
-                print(total_nodes)
+                print(len(rows))
             else:
-                for node_name in sorted(merged_node_name):
-                    if node_name in hermos_node_name and node_name not in ros2_node_name:
-                        suffix = " (Hermos enabled)"
-                    else:
-                        suffix = ""
-                    print(f"{node_name}{suffix}")
+                for row in rows:
+                    print(row)

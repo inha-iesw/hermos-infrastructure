@@ -5,11 +5,11 @@ from ros2node.verb import VerbExtension
 
 from ros2hermos.discovery import (
     add_gossip_timeout_arg,
-    collect_announcements_with_fallback,
     topic_endpoints,
     warn_if_gossip_timeout_overridden,
-    warn_if_using_fallback,
 )
+from ros2hermos.observation.cli import add_scope_arguments, collect_for_args, selected_snapshots
+from ros2hermos.observation.scope import scope_label
 
 class TopicInfoHermosVerb(VerbExtension):
     """Print information about a topic including Hermos."""
@@ -33,6 +33,7 @@ class TopicInfoHermosVerb(VerbExtension):
             action='store_true',
             help='Include internal bridge nodes (hermos_bridge_node_*) in the output')
         add_gossip_timeout_arg(parser)
+        add_scope_arguments(parser)
         arg.completer = TopicNameCompleter(
             include_hidden_topics_key='include_hidden_topics')
 
@@ -73,9 +74,11 @@ class TopicInfoHermosVerb(VerbExtension):
                     nodespace, node_name = self.split_full_node_name(info['node_name'])
                     print('Node name: %s' % node_name)
                     print('Node namespace: %s' % nodespace)
+                    print('PID: %s' % (info['pid'] or 'unknown'))
                     print('Topic type: %s' % topic_types)
                     print('Endpoint type: PUBLISHER (Hermos enabled)')
                     print('QoS profile:')
+                    print('  Reliability: unknown (native publisher does not expose this QoS)')
                     print('  History (Depth): KEEP_LAST (%d)' % info['qos_depth'])
                     if info['qos_is_transient_local']:
                         print('  Durability: TRANSIENT_LOCAL', end=line_end)
@@ -115,9 +118,11 @@ class TopicInfoHermosVerb(VerbExtension):
                     nodespace, node_name = self.split_full_node_name(info['node_name'])
                     print('Node name: %s' % node_name)
                     print('Node namespace: %s' % nodespace)
+                    print('PID: %s' % (info['pid'] or 'unknown'))
                     print('Topic type: %s' % topic_types)
                     print('Endpoint type: SUBSCRIPTION (Hermos enabled)')
                     print('QoS profile:')
+                    print('  Reliability: %s' % ('RELIABLE' if info['qos_is_reliable'] else 'BEST_EFFORT'))
                     print('  History (Depth): KEEP_LAST (%d)' % info['qos_depth'])
                     if info['qos_is_transient_local']:
                         print('  Durability: TRANSIENT_LOCAL', end=line_end)
@@ -131,15 +136,21 @@ class TopicInfoHermosVerb(VerbExtension):
         with NodeStrategy(None) as node:
             topic_name = args.topic_name
 
-            snapshots, used_fallback = collect_announcements_with_fallback(
-                node, timeout_sec=args.gossip_timeout)
-            warn_if_using_fallback(node, used_fallback, args.gossip_timeout, snapshots)
+            try:
+                scope, snapshots = selected_snapshots(
+                    collect_for_args(node, args), node, args, topic_name=topic_name)
+            except ValueError as exc:
+                return str(exc)
+            if scope is not None:
+                print(f'HERM0S {scope_label(scope)}')
             pub_endpoints, sub_endpoints = topic_endpoints(snapshots, topic_name)
 
             def to_info_ret(ep):
                 return {
                     "node_name": ep.node_name,
+                    "pid": ep.pid,
                     "qos_depth": ep.qos_depth,
+                    "qos_is_reliable": ep.qos_is_reliable,
                     "qos_is_transient_local": ep.qos_is_transient_local,
                     "is_bridge": ep.is_bridge,
                 }
@@ -198,6 +209,9 @@ class TopicInfoHermosVerb(VerbExtension):
             if args.verbose:
                 line_end = '\n\n'
             type_str = topic_types[0] if len(topic_types) == 1 else topic_types
+            native_type = gossip_type_name or '<UNKNOWN>'
+            if scope is not None:
+                type_str = native_type
             print('Type: %s' % type_str, end=line_end)
 
             print_publishers_info_ret = self.print_publishers_info(ros2_pub_infos, type_str, pub_topic_info_rets, args, line_end)

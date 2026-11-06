@@ -1,9 +1,8 @@
-"""Check that this (IPC namespace, ROS_DOMAIN_ID)'s Hermos discovery agent is alive.
+"""Check this (IPC namespace, ROS_DOMAIN_ID)'s registered bridge discovery agent.
 
-The agent publishes the local Hermos state on ``/_hermos_discovery``
-for cross-namespace observability. If the agent is not running (or
-running in a different IPC namespace), that observability silently stops
-working — this verb gives the operator a single place to confirm liveness.
+The agent publishes the local Hermos state on ``/_hermos_discovery_v2``
+for cross-namespace discovery. Observation-only writers can run independently;
+they do not satisfy this command's bridge-agent liveness check.
 
 The agent runs one instance per (IPC namespace, ROS_DOMAIN_ID), so this
 command only inspects the **current** namespace and domain (the ones the
@@ -15,6 +14,7 @@ Default output is a single one-line verdict — nothing else:
   * ``OK. The discovery agent is running.``
   * ``NG. The discovery agent is not running.``
   * ``NG. The discovery agent is running but not publishing.``
+  * ``NG. The discovery agent is running but publication could not be verified.``
 
 (``--verbose`` adds the reason behind the verdict; see below.)
 
@@ -24,18 +24,17 @@ The verdict is driven by two internal checks:
     registry entry for the agent's whole lifetime, so we query it. The kmod
     scopes the query to the caller's IPC namespace and the given domain, so
     this needs no executable-path matching.
-  * **gossip** — a snapshot from this IPC namespace is received on
-    ``/_hermos_discovery`` within the timeout. ``gossip`` OK implies
-    ``process`` OK (an agent that publishes is alive), so it is the primary,
-    end-to-end signal; ``process`` only distinguishes "not running" from
-    "running but not publishing" when ``gossip`` is NG.
+  * **gossip** — a bridge-role snapshot from the local host boot UUID,
+    IPC namespace, domain and selected device is received on ``/_hermos_discovery_v2`` within
+    the timeout. An observer cannot satisfy this check. Both the kernel
+    registration and this publication check must succeed.
 
 ``--verbose`` additionally prints the IPC namespace inode, the ROS_DOMAIN_ID,
 each check's result, and a ``type_registry`` line (how many live Hermos processes have
 registered). None of those affect the exit code — they are context, not part
 of the verdict.
 
-Exit code: 0 when the agent is running (gossip OK), 1 otherwise.
+Exit code: 0 when registration and publication are verified, 1 otherwise.
 """
 
 import ctypes
@@ -43,6 +42,9 @@ import os
 
 from ros2cli.node.strategy import NodeStrategy
 from ros2cli.verb import VerbExtension
+from ros2hermos._ioctl import _local_host_uuid, _local_ipc_ns_inode as _self_ipc_ns_inode
+from ros2hermos_discovery_agent.agent import _read_ros_domain_id
+from ros2hermos_discovery_agent.observation.protocol import local_device_id, WRITER_BRIDGE
 
 from ros2hermos.discovery import (
     add_gossip_timeout_arg,
@@ -56,24 +58,6 @@ def _type_registry_base() -> str:
     """Resolve the tmpfs root, honoring ``HERMOS_TMPFS_DIR`` like the writer."""
     root = os.environ.get('HERMOS_TMPFS_DIR') or '/dev/shm'
     return os.path.join(root, 'hermos_type_registry')
-
-
-def _self_ipc_ns_inode():
-    return os.stat('/proc/self/ns/ipc').st_ino
-
-
-def _read_ros_domain_id() -> int:
-    """Return ROS_DOMAIN_ID from the environment (0 if unset, empty, or
-    unparsable), matching ``ros2hermos_discovery_agent.agent._read_ros_domain_id``
-    so this verb resolves the same domain the agent runs under.
-    """
-    raw = os.environ.get('ROS_DOMAIN_ID')
-    if not raw:
-        return 0
-    try:
-        return int(raw)
-    except ValueError:
-        return 0
 
 
 def _check_daemon_process(domain_id):
@@ -102,27 +86,36 @@ def _check_daemon_process(domain_id):
     return False, f'no agent registered in the kmod (domain {domain_id})'
 
 
-def _check_gossip(my_ns_inode, timeout_sec):
-    """Return (ok, reason) for the gossip-subscription check.
+def _check_gossip(my_ns_inode, domain_id, timeout_sec):
+    """Return (ok, reason), with ok=None when local identity cannot be verified.
 
     ``collect_announcements`` aggregates every namespace publishing on the
-    shared gossip topic, so we filter for a snapshot tagged with our own
-    ``ipc_ns_inode`` — a snapshot from another namespace must not pass this
-    check. ``NodeStrategy`` initializes rclpy itself; do not call
+    shared gossip topic, so we require the local host, namespace, domain, device and
+    bridge writer role. ``NodeStrategy`` initializes rclpy itself; do not call
     ``rclpy.init`` here or the second call raises ``Context.init() must
     only be called once``.
     """
+    host_uuid = _local_host_uuid()
+    if not host_uuid:
+        return None, 'local host boot UUID unavailable; cannot identify this host in gossip'
+    try:
+        device_id = local_device_id()
+    except OSError as exc:
+        return None, f'local device identity unavailable: {exc}'
     with NodeStrategy(None) as node:
         snapshots = collect_announcements(node, timeout_sec)
 
-    seen_my_ns = any(s.ipc_ns_inode == my_ns_inode for s in snapshots)
+    seen_my_ns = any(
+        s.host_uuid == host_uuid and s.ipc_ns_inode == my_ns_inode and
+        s.domain_id == domain_id and s.device_id == device_id and s.writer_role == WRITER_BRIDGE
+        for s in snapshots)
     if seen_my_ns:
         return True, f'snapshot received on {GOSSIP_TOPIC}'
 
     if snapshots:
         return False, (
-            f'no snapshot from this namespace within {timeout_sec}s '
-            f'({len(snapshots)} from other namespace(s))')
+            f'no bridge-agent snapshot from this host/namespace/domain/device within {timeout_sec}s '
+            f'({len(snapshots)} other writer snapshot(s))')
 
     return False, f'no snapshot on {GOSSIP_TOPIC} within {timeout_sec}s'
 
@@ -185,15 +178,18 @@ class DiscoveryDaemonStatusVerb(VerbExtension):
         # gossip is the end-to-end signal, but it only matters if a process is
         # up; skip its timeout wait when the agent clearly isn't running.
         if proc_ok:
-            gossip_ok, gossip_reason = _check_gossip(my_ns_inode, args.gossip_timeout)
+            gossip_ok, gossip_reason = _check_gossip(
+                my_ns_inode, my_domain_id, args.gossip_timeout)
         else:
             gossip_ok, gossip_reason = None, None
 
         if args.verbose:
             print(f'IPC namespace inode: {my_ns_inode}, ROS_DOMAIN_ID: {my_domain_id}')
             print(f'  process:       {"OK" if proc_ok else "NG"} ({proc_reason})')
-            if gossip_ok is None:
+            if not proc_ok:
                 print('  gossip:        skipped (agent not running)')
+            elif gossip_ok is None:
+                print(f'  gossip:        unknown ({gossip_reason})')
             else:
                 print(f'  gossip:        {"OK" if gossip_ok else "NG"} ({gossip_reason})')
             print(f'  type_registry: {_describe_type_registry(my_ns_inode)}')
@@ -209,5 +205,8 @@ class DiscoveryDaemonStatusVerb(VerbExtension):
             print('NG. The discovery agent is not running.')
             return 1
 
-        print('NG. The discovery agent is running but not publishing.')
+        if gossip_ok is None:
+            print('NG. The discovery agent is running but publication could not be verified.')
+        else:
+            print('NG. The discovery agent is running but not publishing.')
         return 1
