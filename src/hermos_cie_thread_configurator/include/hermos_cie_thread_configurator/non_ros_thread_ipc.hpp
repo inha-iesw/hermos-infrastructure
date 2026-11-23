@@ -152,7 +152,10 @@ inline void send_non_ros_thread_info(
 
 /// Receives non-ROS thread announcements over an abstract Unix datagram
 /// socket and dispatches each to the user callback on a private reader
-/// thread.
+/// thread. Kernel-supplied credentials must match the listener effective UID,
+/// and /proc Tgid must identify the announced thread as belonging to that
+/// sending process; other announcements
+/// are dropped. This is a receive-time ownership check, not a stable task handle.
 ///
 /// At most one NonRosThreadInfoListener may exist per host: the bound
 /// abstract socket name is a fixed compile-time constant

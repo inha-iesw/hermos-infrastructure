@@ -1,6 +1,7 @@
 #include "hermos_cie_thread_configurator/non_ros_thread_ipc.hpp"
 
 #include "rclcpp/logging.hpp"
+#include "ipc/thread_owner.hpp"
 
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
@@ -11,12 +12,22 @@
 namespace hermos_cie_thread_configurator
 {
 
+
 NonRosThreadInfoListener::NonRosThreadInfoListener(Callback callback, rclcpp::Logger logger)
 : callback_(std::move(callback)), logger_(std::move(logger))
 {
   listener_fd_ = ::socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0);
   if (listener_fd_ < 0) {
     throw std::system_error(errno, std::generic_category(), "socket");
+  }
+
+  const int pass_credentials = 1;
+  if (::setsockopt(listener_fd_, SOL_SOCKET, SO_PASSCRED, &pass_credentials,
+                  sizeof(pass_credentials)) < 0) {
+    const int saved = errno;
+    ::close(listener_fd_);
+    listener_fd_ = -1;
+    throw std::system_error(saved, std::generic_category(), "setsockopt SO_PASSCRED");
   }
 
   sockaddr_un addr{};
@@ -157,11 +168,16 @@ void NonRosThreadInfoListener::run()
         exit_loop = true;
         break;
       }
-      // MSG_TRUNC makes recv() return the real datagram length even when it
-      // exceeds the buffer (Linux UNIX-DGRAM since 3.4), so we can detect
-      // and drop oversized datagrams instead of silently feeding truncated
-      // bytes to decode_non_ros_thread_info().
-      ssize_t n = ::recv(listener_fd_, buf.data(), buf.size(), MSG_TRUNC);
+      // Kernel credentials, never a payload UID, bind the announcement to the
+      // configurator user and to a thread in the sending process.
+      alignas(cmsghdr) char control[CMSG_SPACE(sizeof(ucred))]{};
+      iovec payload{buf.data(), buf.size()};
+      msghdr message{};
+      message.msg_iov = &payload;
+      message.msg_iovlen = 1;
+      message.msg_control = control;
+      message.msg_controllen = sizeof(control);
+      ssize_t n = ::recvmsg(listener_fd_, &message, MSG_TRUNC);
       if (n < 0) {
         if (errno == EINTR) {
           continue;
@@ -169,7 +185,7 @@ void NonRosThreadInfoListener::run()
         RCLCPP_WARN(logger_, "recv() failed: errno=%d", errno);
         continue;
       }
-      if (static_cast<size_t>(n) > buf.size()) {
+      if (static_cast<size_t>(n) > buf.size() || (message.msg_flags & MSG_CTRUNC)) {
         RCLCPP_WARN(
           logger_, "Discarded oversized NonRosThreadInfo datagram (real_size=%zd > buf=%zu)", n,
           buf.size());
@@ -178,6 +194,18 @@ void NonRosThreadInfoListener::run()
       NonRosThreadInfo info;
       if (!decode_non_ros_thread_info(buf.data(), static_cast<size_t>(n), info)) {
         RCLCPP_WARN(logger_, "Discarded malformed NonRosThreadInfo datagram (size=%zd)", n);
+        continue;
+      }
+      const ucred * credentials = nullptr;
+      for (cmsghdr * header = CMSG_FIRSTHDR(&message); header;
+           header = CMSG_NXTHDR(&message, header)) {
+        if (header->cmsg_level == SOL_SOCKET && header->cmsg_type == SCM_CREDENTIALS &&
+            header->cmsg_len == CMSG_LEN(sizeof(ucred))) {
+          credentials = reinterpret_cast<const ucred *>(CMSG_DATA(header));
+        }
+      }
+      if (!detail::accepts_thread_announcement(info.tid, credentials, geteuid())) {
+        RCLCPP_WARN(logger_, "Discarded NonRosThreadInfo from an unauthorized user or thread");
         continue;
       }
       // The user-supplied callback is invoked on this private reader thread,

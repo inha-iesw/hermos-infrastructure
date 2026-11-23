@@ -79,6 +79,7 @@ if(BUILD_TESTING)
     test/test_non_ros_thread_ipc.cpp
   )
   target_link_libraries(test_${PROJECT_NAME} hermos_thread_configurator)
+  target_include_directories(test_${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
   ament_add_gtest(test_thread_config
     test/test_thread_config.cpp

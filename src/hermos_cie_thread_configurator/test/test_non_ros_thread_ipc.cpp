@@ -1,9 +1,11 @@
 #include "hermos_cie_thread_configurator/non_ros_thread_ipc.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "ipc/thread_owner.hpp"
 
 #include <gtest/gtest.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -15,6 +17,8 @@
 #include <cstdint>
 #include <cstring>
 #include <mutex>
+#include <limits>
+#include <future>
 #include <string>
 #include <system_error>
 #include <thread>
@@ -233,22 +237,22 @@ TEST(NonRosThreadInfoListener, DispatchesReceivedDatagram)
     },
     test_logger());
 
-  acie::send_non_ros_thread_info({100, "alpha"});
-  acie::send_non_ros_thread_info({200, "beta"});
+  acie::send_non_ros_thread_info({getpid(), "alpha"});
+  acie::send_non_ros_thread_info({getpid(), "beta"});
 
   std::unique_lock<std::mutex> lk(m);
   ASSERT_TRUE(cv.wait_for(lk, std::chrono::seconds(2), [&] { return received.size() == 2u; }));
 
   // SOCK_DGRAM does not formally guarantee order even on the same host, so
-  // sort by tid before asserting on contents.
+  // sort by name before asserting on contents.
   std::sort(
     received.begin(), received.end(),
     [](const acie::NonRosThreadInfo & a, const acie::NonRosThreadInfo & b) {
-      return a.tid < b.tid;
+      return a.name < b.name;
     });
-  EXPECT_EQ(received[0].tid, 100);
+  EXPECT_EQ(received[0].tid, getpid());
   EXPECT_EQ(received[0].name, "alpha");
-  EXPECT_EQ(received[1].tid, 200);
+  EXPECT_EQ(received[1].tid, getpid());
   EXPECT_EQ(received[1].name, "beta");
 }
 
@@ -268,7 +272,7 @@ TEST(NonRosThreadInfoListener, DropsMalformedDatagram)
   ASSERT_EQ(static_cast<size_t>(s), sizeof(bad));
 
   // Now send a well-formed message and wait for it.
-  acie::send_non_ros_thread_info({1, "ok"});
+  acie::send_non_ros_thread_info({getpid(), "ok"});
 
   // Give the listener some time. We can't easily synchronize on the dropped
   // message, so wait for the well-formed callback to land.
@@ -300,4 +304,69 @@ TEST(NonRosThreadInfoListener, AfterStopSendTimesOut)
   const auto elapsed = std::chrono::steady_clock::now() - t0;
 
   EXPECT_GE(elapsed, std::chrono::milliseconds(100));
+}
+
+TEST(NonRosThreadInfoListener, RejectsThreadsOutsideSenderProcess)
+{
+  std::mutex mutex;
+  std::condition_variable ready;
+  std::vector<std::string> names;
+  acie::NonRosThreadInfoListener listener(
+    [&](const acie::NonRosThreadInfo & info) {
+      std::lock_guard<std::mutex> lock(mutex);
+      names.push_back(info.name);
+      ready.notify_one();
+    }, test_logger());
+  for (int64_t tid : {int64_t{0}, int64_t{-1}, int64_t{getppid()},
+                      std::numeric_limits<int64_t>::max()}) {
+    acie::send_non_ros_thread_info({tid, "rejected"});
+  }
+  acie::send_non_ros_thread_info({getpid(), "accepted"});
+  std::unique_lock<std::mutex> lock(mutex);
+  ASSERT_TRUE(ready.wait_for(lock, std::chrono::seconds(2), [&] {
+    return std::find(names.begin(), names.end(), "accepted") != names.end();
+  }));
+  EXPECT_EQ(names, std::vector<std::string>{"accepted"});
+}
+
+TEST(NonRosThreadInfoListener, AcceptsAnotherThreadInSenderProcess)
+{
+  std::mutex mutex;
+  std::condition_variable ready;
+  int64_t received_tid = 0;
+  acie::NonRosThreadInfoListener listener(
+    [&](const acie::NonRosThreadInfo & info) {
+      std::lock_guard<std::mutex> lock(mutex);
+      received_tid = info.tid;
+      ready.notify_one();
+    }, test_logger());
+  std::promise<int64_t> thread_id;
+  std::promise<void> finish;
+  auto release = finish.get_future();
+  std::thread worker([&] {
+    thread_id.set_value(syscall(SYS_gettid));
+    release.wait();
+  });
+  const int64_t tid = thread_id.get_future().get();
+  acie::send_non_ros_thread_info({tid, "worker"});
+  std::unique_lock<std::mutex> lock(mutex);
+  const bool received = ready.wait_for(lock, std::chrono::seconds(2), [&] {
+    return received_tid != 0;
+  });
+  finish.set_value();
+  worker.join();
+  EXPECT_TRUE(received);
+  EXPECT_EQ(received_tid, tid);
+}
+
+TEST(NonRosThreadCredentials, AcceptsOnlyTheOwnersThreads)
+{
+  const ucred own{getpid(), geteuid(), getegid()};
+  EXPECT_TRUE(acie::detail::accepts_thread_announcement(getpid(), &own, geteuid()));
+  EXPECT_FALSE(acie::detail::accepts_thread_announcement(getpid(), nullptr, geteuid()));
+  const ucred foreign{getpid(), static_cast<uid_t>(geteuid() + 1), getegid()};
+  EXPECT_FALSE(acie::detail::accepts_thread_announcement(getpid(), &foreign, geteuid()));
+  const ucred invalid{0, geteuid(), getegid()};
+  EXPECT_FALSE(acie::detail::accepts_thread_announcement(getpid(), &invalid, geteuid()));
+  EXPECT_FALSE(acie::detail::accepts_thread_announcement(getppid(), &own, geteuid()));
 }
