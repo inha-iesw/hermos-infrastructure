@@ -2,9 +2,11 @@
 
 #include <gtest/gtest.h>
 #include <rcutils/logging.h>
+#include <rcpputils/scope_exit.hpp>
 
 #include <cstdarg>
 #include <cstdio>
+#include <optional>
 #include <string>
 
 namespace
@@ -71,12 +73,22 @@ TEST(HermosUtilsTest, create_mq_name_invalid_topic)
 
 TEST(HermosUtilsTest, create_uds_addr_bridge_manager)
 {
-  const auto addr = hermos::create_uds_addr_for_bridge();
-  ASSERT_FALSE(addr.empty());
-  EXPECT_EQ(addr[0], '\0');
-  const auto expected =
-    "hermos_bridge_manager_" + std::to_string(hermos::get_self_ipc_ns_inode());
-  EXPECT_EQ(addr.substr(1), expected);
+  const char * inherited = getenv("ROS_DOMAIN_ID");
+  const auto saved = inherited ? std::make_optional(std::string(inherited)) : std::nullopt;
+  RCPPUTILS_SCOPE_EXIT({
+    if (saved) {setenv("ROS_DOMAIN_ID", saved->c_str(), 1);} else {unsetenv("ROS_DOMAIN_ID");}
+  });
+  const auto prefix = "hermos_bridge_manager_" + std::to_string(hermos::get_self_ipc_ns_inode());
+  const std::pair<const char *, const char *> cases[] = {
+    {nullptr, ""}, {"", ""}, {"0", ""}, {"07", "_d7"}, {"7 ", "_d7"}, {" +007 ", "_d7"},
+    {"abc", ""}, {"7_0", ""}, {"-1", ""}, {"4294967296", ""}, {"4294967295", "_d4294967295"}};
+  for (const auto & [domain, suffix] : cases) {
+    if (domain) {setenv("ROS_DOMAIN_ID", domain, 1);} else {unsetenv("ROS_DOMAIN_ID");}
+    const auto addr = hermos::create_uds_addr_for_bridge();
+    ASSERT_FALSE(addr.empty());
+    EXPECT_EQ(addr[0], '\0');
+    EXPECT_EQ(addr.substr(1), prefix + suffix);
+  }
 }
 
 TEST(HermosUtilsTest, validate_ld_preload_normal)

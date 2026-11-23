@@ -219,15 +219,25 @@ def test_serialize_packs_direction_qos_at_expected_offsets():
     assert (direction, depth, transient, reliable) == (DIRECTION_ROS2_TO_HERMOS, 7, 1, 1)
 
 
-def test_dispatch_targets_per_namespace_uds(monkeypatch):
+@pytest.mark.parametrize(('raw', 'suffix'), [
+    (None, ''), ('', ''), ('0', ''), ('07', '_d7'), ('7 ', '_d7'), (' +007 ', '_d7'),
+    ('abc', ''), ('7_0', ''), ('-1', ''), ('4294967296', ''), ('4294967295', '_d4294967295'),
+])
+def test_dispatch_targets_per_namespace_uds(monkeypatch, raw, suffix):
     from ros2hermos_discovery_agent import bridge_decider as bd
+    from ros2hermos_discovery_agent.agent import _read_ros_domain_id
+    if raw is None:
+        monkeypatch.delenv('ROS_DOMAIN_ID', raising=False)
+    else:
+        monkeypatch.setenv('ROS_DOMAIN_ID', raw)
     sent = []
     monkeypatch.setattr(bd, 'send_request', lambda addr, payload: sent.append(addr) or None)
 
-    req = BridgeRequest('/x', 'T', DIRECTION_HERMOS_TO_ROS2, 1, False, True)
+    req = BridgeRequest('/x', 'T', DIRECTION_HERMOS_TO_ROS2, 1, False, True,
+                        domain_id=_read_ros_domain_id())
     dispatch_requests([req], ipc_ns_inode=12345)
 
-    assert sent == ['\x00hermos_bridge_manager_12345']
+    assert sent == ['\x00hermos_bridge_manager_12345' + suffix]
 
 
 def test_dispatch_routes_to_per_domain_uds(monkeypatch):

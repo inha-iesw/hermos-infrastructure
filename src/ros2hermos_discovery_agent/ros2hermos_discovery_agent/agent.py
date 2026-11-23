@@ -320,13 +320,14 @@ def _read_ros_domain_id() -> int:
     raw = os.environ.get('ROS_DOMAIN_ID')
     if not raw:
         return 0
-    try:
-        value = int(raw)
-    except ValueError:
+    digits = raw.strip(' \t\n\r\f\v').removeprefix('+')
+    if not digits.isascii() or not digits.isdecimal():
         return 0
-    if value < 0 or value > 0xFFFFFFFF:
+    digits = digits.lstrip('0') or '0'
+    if len(digits) > 10:
         return 0
-    return value
+    value = int(digits)
+    return value if value <= 0xFFFFFFFF else 0
 
 
 def _gossip_qos():

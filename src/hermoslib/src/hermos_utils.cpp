@@ -79,18 +79,6 @@ std::string create_mq_name_for_hermos_publish(
   return create_mq_name("/hermos", topic_name, id);
 }
 
-// UDS-address suffix that scopes the per-IPC-namespace bridge listener by domain.
-// An unset OR empty ROS_DOMAIN_ID means "no domain" (no suffix), keeping this in
-// sync with the Python discovery agent (bridge_decider._bridge_uds_addr).
-static std::string bridge_domain_suffix()
-{
-  const char * domain_id = getenv("ROS_DOMAIN_ID");
-  if (domain_id == nullptr || *domain_id == '\0') {
-    return "";
-  }
-  return "_d" + std::string(domain_id);
-}
-
 uint32_t get_ros_domain_id()
 {
   const char * domain_id_env = getenv("ROS_DOMAIN_ID");
@@ -99,10 +87,19 @@ uint32_t get_ros_domain_id()
   }
   char * end = nullptr;
   errno = 0;
-  const uint64_t value = std::strtoul(domain_id_env, &end, 10);
+  constexpr char whitespace[] = " \t\n\r\f\v";
+  const char * first = domain_id_env + std::strspn(domain_id_env, whitespace);
+  if (*first == '+') {
+    ++first;
+  }
+  if (*first < '0' || *first > '9') {
+    return 0;
+  }
+  const uint64_t value = std::strtoul(first, &end, 10);
   // Out-of-range values would silently wrap into an unintended domain (e.g. 0),
   // breaking isolation, so reject them rather than truncate.
-  if (*end != '\0' || errno != 0 || value > std::numeric_limits<uint32_t>::max()) {
+  if (end[std::strspn(end, whitespace)] != '\0' || errno != 0 ||
+      value > std::numeric_limits<uint32_t>::max()) {
     return 0;
   }
   return static_cast<uint32_t>(value);
@@ -125,7 +122,10 @@ std::string create_uds_addr_for_bridge()
   addr.push_back('\0');
   addr += "hermos_bridge_manager_";
   addr += std::to_string(get_self_ipc_ns_inode());
-  addr += bridge_domain_suffix();
+  const auto domain = get_ros_domain_id();
+  if (domain != 0) {
+    addr += "_d" + std::to_string(domain);
+  }
   return addr;
 }
 
