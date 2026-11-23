@@ -134,19 +134,17 @@ def test_decide_skips_when_type_unknown_on_both_sides():
     assert decide_bridges(local, {('OTHER', 222): remote}) == []
 
 
-def test_decide_uses_remote_type_when_local_missing():
+def test_decide_skips_remote_type_when_local_missing():
     local = _state(topics=[_topic('/x', type_name='', pubs=[_endpoint('/lp')])])
     remote = _state(host_uuid='OTHER', ipc_ns=222,
                     topics=[_topic('/x', type_name='std_msgs/msg/String',
                                    subs=[_endpoint('/rs')])])
     reqs = decide_bridges(local, {('OTHER', 222): remote})
-    assert len(reqs) == 1
-    assert reqs[0].type_name == 'std_msgs/msg/String'
+    assert reqs == []
 
 
-def test_decide_uses_type_from_other_remote_when_matching_remote_missing():
-    # The remote that supplies the opposite-role endpoint (sub) has no type,
-    # but another remote snapshot for the same topic does -> still bridged.
+def test_decide_skips_remote_types_without_a_local_type():
+    # Remote type hints cannot identify the layout of local shared memory.
     local = _state(topics=[_topic('/x', type_name='', pubs=[_endpoint('/lp')])])
     remote_sub = _state(host_uuid='A', ipc_ns=1,
                         topics=[_topic('/x', type_name='', subs=[_endpoint('/rs')])])
@@ -154,8 +152,7 @@ def test_decide_uses_type_from_other_remote_when_matching_remote_missing():
                          topics=[_topic('/x', type_name='std_msgs/msg/String')])
 
     reqs = decide_bridges(local, {('A', 1): remote_sub, ('B', 2): remote_type})
-    assert len(reqs) == 1
-    assert reqs[0].type_name == 'std_msgs/msg/String'
+    assert reqs == []
 
 
 def test_decide_skips_when_only_same_role_present():
@@ -247,3 +244,16 @@ def test_dispatch_routes_to_per_domain_uds(monkeypatch):
         '\x00hermos_bridge_manager_12345',
         '\x00hermos_bridge_manager_12345_d5',
     ]
+
+
+def test_decide_keeps_local_type_when_remote_type_conflicts():
+    local = _state(topics=[_topic('/x', type_name='std_msgs/msg/Int32',
+                                  pubs=[_endpoint('/lp')])])
+    remote = _state(host_uuid='OTHER', ipc_ns=222,
+                    topics=[_topic('/x', type_name='std_msgs/msg/String',
+                                   subs=[_endpoint('/rs')])])
+    reqs = decide_bridges(local, {('OTHER', 222): remote})
+    assert len(reqs) == 1
+    assert reqs[0].type_name == 'std_msgs/msg/Int32'
+
+

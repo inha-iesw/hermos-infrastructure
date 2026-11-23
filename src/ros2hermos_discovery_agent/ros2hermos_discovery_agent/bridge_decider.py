@@ -84,22 +84,6 @@ def serialize_request(req: BridgeRequest) -> bytes:
     )
 
 
-def _resolve_types(local_state, remote_states) -> dict:
-    """Resolve each ``(topic, domain)``'s message type, preferring local then any remote.
-
-    The type must be resolved across local + *all* remotes: the remote that
-    supplies the opposite-role endpoint may lack the type while another snapshot
-    has it.
-    """
-    types = {
-        (t.topic_name, t.domain_id): t.type_name for t in local_state.topics if t.type_name}
-    for remote in remote_states.values():
-        for t in remote.topics:
-            if t.type_name:
-                types.setdefault((t.topic_name, t.domain_id), t.type_name)
-    return types
-
-
 def decide_bridges(local_state, remote_states) -> list:
     """Return the bridge requests this namespace should issue this tick.
 
@@ -111,7 +95,6 @@ def decide_bridges(local_state, remote_states) -> list:
     requests = {}
 
     local_by_topic = {(t.topic_name, t.domain_id): t for t in local_state.topics}
-    types = _resolve_types(local_state, remote_states)
 
     for remote in remote_states.values():
         if (remote.host_uuid == local_state.host_uuid and
@@ -130,7 +113,9 @@ def decide_bridges(local_state, remote_states) -> list:
             remote_subs = [s for s in remote_topic.subscribers if not s.is_bridge and s.qos_depth > 0]
 
             domain_id = local_topic.domain_id
-            type_name = types.get((local_topic.topic_name, domain_id))
+            # Only local registration can identify the shared-memory layout.
+            # An empty type also represents conflicting local announcements.
+            type_name = local_topic.type_name
             if not type_name:
                 continue
 
