@@ -12,11 +12,13 @@ from ros2hermos.observation.scope import (
 def snapshot(*, session='epoch-a', domain=7, host='host', ipc=42, role=1, device='240:0',
              version=2, timestamp=100, lease=30_000_000_000, topics=None):
     return SimpleNamespace(
-        schema_version=version, host_uuid=host, ipc_ns_inode=ipc, writer_role=role,
+        schema_version=version, host_uuid=host, host_hostname=host, hermos_version='test',
+        ipc_ns_inode=ipc, writer_role=role,
         domain_id=domain, device_id=device, session_id=session, snapshot_time_ns=timestamp,
         lease_duration_ns=lease,
         topics=topics if topics is not None else [
-            SimpleNamespace(topic_name='/same', domain_id=domain)],
+            SimpleNamespace(topic_name='/same', domain_id=domain, type_name='',
+                            publishers=[], subscribers=[])],
     )
 
 

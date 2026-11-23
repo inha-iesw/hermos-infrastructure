@@ -42,6 +42,11 @@ def writer_qos(depth=1):
     return qos
 
 
+def has_control_characters(*texts):
+    """Identify text that must not reach terminals or metadata identifiers."""
+    return any(re.search(r'[\x00-\x1f\x7f-\x9f\u2028\u2029]', text) for text in texts)
+
+
 def validate_snapshot(snapshot):
     """Reject unknown wire schemas and invalid per-domain freshness envelopes."""
     if snapshot.schema_version != SCHEMA_VERSION:
@@ -54,6 +59,16 @@ def validate_snapshot(snapshot):
         raise ValueError('HERM0S metadata v2 freshness lease must be 30 seconds')
     if any(topic.domain_id != snapshot.domain_id for topic in snapshot.topics):
         raise ValueError('HERM0S metadata topic and snapshot domain disagree')
+    # These identifiers are also rendered by the CLI. Reject terminal controls
+    # at the shared input boundary before caching or displaying remote data.
+    texts = [snapshot.host_uuid, snapshot.host_hostname, snapshot.session_id,
+             snapshot.hermos_version]
+    for topic in snapshot.topics:
+        texts.extend((topic.topic_name, topic.type_name))
+        for endpoint in (*topic.publishers, *topic.subscribers):
+            texts.extend((endpoint.node_name, endpoint.statistics_status))
+    if has_control_characters(*texts):
+        raise ValueError('HERM0S metadata identifiers must not contain control characters')
 
 
 def scope_key(snapshot):

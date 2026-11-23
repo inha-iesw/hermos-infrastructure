@@ -43,7 +43,7 @@ from . import bridge_decider
 from .type_registry import TypeRegistryReader
 from .observation.protocol import (
     GOSSIP_TOPIC, LEASE_NS, latest_per_route, local_device_id, make_snapshot, reader_qos,
-    scope_key, validate_snapshot, writer_qos,
+    has_control_characters, scope_key, validate_snapshot, writer_qos,
     WRITER_BRIDGE, WRITER_OBSERVER,
 )
 
@@ -205,6 +205,9 @@ def read_local_topics(
     sufficient to scope the result. The optional ``registry`` argument
     supplies the type names and pids that the ioctl does not expose.
 
+    Rows containing terminal control characters are omitted individually and
+    logged; other topics and endpoints remain observable.
+
     When ``own_domain_id`` is given, only topics in that domain are returned.
     Each agent is per-(IPC namespace, domain) and gossips on its own DDS domain,
     so it must report only its own domain's topics; otherwise it would leak
@@ -228,6 +231,9 @@ def read_local_topics(
         for i in range(topic_count.value):
             topic_name_b = ctypes.cast(topic_names_ptr[i], ctypes.c_char_p).value
             topic_name = topic_name_b.decode('utf-8', errors='replace')
+            if has_control_characters(topic_name):
+                logging.warning('Skipping local topic with control characters: %r', topic_name)
+                continue
             # The same topic name can occur once per domain; each row is a
             # distinct (name, domain) pair that becomes its own HermosTopic.
             domain_id = domain_ids_ptr[i]
@@ -244,9 +250,22 @@ def read_local_topics(
             hermos_topic.subscribers = _collect_endpoints(
                 lib.get_hermos_sub_nodes, lib, topic_name_b, topic_name, domain_id, 'sub',
                 registry)
+            for field in ('publishers', 'subscribers'):
+                valid = []
+                for endpoint in getattr(hermos_topic, field):
+                    if has_control_characters(endpoint.node_name, endpoint.statistics_status):
+                        logging.warning('Skipping local endpoint with control characters: %r',
+                                        endpoint.node_name)
+                    else:
+                        valid.append(endpoint)
+                setattr(hermos_topic, field, valid)
             # Never choose one type from conflicting process announcements.
             if registry is not None:
                 resolved = _resolve_topic_type(hermos_topic, registry)
+                if has_control_characters(resolved):
+                    logging.warning('Skipping local topic with control characters in type: %r',
+                                    topic_name)
+                    continue
                 if resolved:
                     hermos_topic.type_name = resolved
             topics.append(hermos_topic)

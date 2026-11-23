@@ -445,3 +445,35 @@ def test_exit_when_idle_enabled_via_cli_flag(monkeypatch):
     monkeypatch.delenv(EXIT_WHEN_IDLE_ENV, raising=False)
     monkeypatch.setattr(sys, 'argv', ['discovery_agent', EXIT_WHEN_IDLE_FLAG])
     assert _exit_when_idle_enabled() is True
+
+
+def test_invalid_local_names_do_not_hide_healthy_topics_or_endpoints(caplog):
+    lib = _make_mock_lib({
+        '/bad\nname': {'pub': [_make_info('/hidden')]},
+        '/valid': {'pub': [_make_info('/bad\x1bnode'), _make_info('/healthy')],
+                   'sub': [_make_info('/reader')]},
+        '/other': {'pub': [_make_info('/other_writer')]},
+    })
+    topics = read_local_topics(lib)
+    assert [t.topic_name for t in topics] == ['/valid', '/other']
+    assert [ep.node_name for ep in topics[0].publishers] == ['/healthy']
+    assert [ep.node_name for ep in topics[0].subscribers] == ['/reader']
+    assert 'control characters' in caplog.text
+    assert '/bad\x1bnode' not in caplog.text
+    lib.free_hermos_topics.assert_called_once()
+    lib.free_hermos_topic_domains.assert_called_once()
+
+
+def test_invalid_local_type_does_not_hide_other_topics(caplog):
+    registry = MagicMock()
+    registry.lookup.return_value = None
+    registry.lookup_type.side_effect = lambda topic, *_args, **_kwargs: (
+        'std_msgs/msg/Bad\nType' if topic == '/bad_type' else 'std_msgs/msg/String')
+    lib = _make_mock_lib({
+        '/bad_type': {'pub': [_make_info('/writer')]},
+        '/valid': {'pub': [_make_info('/writer')]},
+    })
+    topics = read_local_topics(lib, registry)
+    assert [t.topic_name for t in topics] == ['/valid']
+    assert topics[0].type_name == 'std_msgs/msg/String'
+    assert 'control characters' in caplog.text

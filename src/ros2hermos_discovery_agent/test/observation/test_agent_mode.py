@@ -235,3 +235,30 @@ def test_auto_fork_claims_singleton_and_keeps_idle_exit_with_bridge_manager_off(
     assert agent.main(arguments) == 0
     assert library.hermos_discovery_agent_register.call_count == 2
     node.assert_called_once_with(exit_when_idle=True, observation_only=False)
+
+
+@pytest.mark.parametrize('field', ['host_uuid', 'host_hostname', 'session_id', 'hermos_version'])
+@pytest.mark.parametrize('control', ['\n', '\x1b', '\x00', '\x7f', '\u009b'])
+def test_remote_control_characters_do_not_enter_cache(field, control):
+    receiver = SimpleNamespace(
+        _host_uuid='local', _ipc_ns_inode=1, _domain_id=7, _remote_states={})
+    message = _state()
+    setattr(message, field, 'remote' + control + 'text')
+    agent.DiscoveryAgent._on_remote_state(receiver, message)
+    assert not receiver._remote_states
+
+
+@pytest.mark.parametrize('field', ['topic_name', 'type_name', 'node_name', 'statistics_status'])
+def test_remote_endpoint_control_characters_do_not_enter_cache(field):
+    from ros2hermos_discovery_msgs.msg import HermosEndpoint, HermosTopic
+
+    receiver = SimpleNamespace(
+        _host_uuid='local', _ipc_ns_inode=1, _domain_id=7, _remote_states={})
+    endpoint = HermosEndpoint(node_name='/reader')
+    topic = HermosTopic(topic_name='/x', type_name='std_msgs/msg/Int32', domain_id=7,
+                        subscribers=[endpoint])
+    setattr(endpoint if field in ('node_name', 'statistics_status') else topic, field, '/unsafe\nrow')
+    message = _state()
+    message.topics = [topic]
+    agent.DiscoveryAgent._on_remote_state(receiver, message)
+    assert not receiver._remote_states
