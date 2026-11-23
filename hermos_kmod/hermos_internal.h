@@ -257,7 +257,7 @@ bool hermos_remove_unlink_daemon_by_pid(const pid_t pid);
 
 int hermos_get_size_sub_info_htable(struct topic_wrapper * wrapper);
 
-int hermos_get_size_pub_info_htable(struct topic_wrapper * wrapper);
+int hermos_get_size_pub_info_htable(const struct topic_wrapper * wrapper);
 
 // True if the (possibly shared) topic_struct holds any endpoint in this wrapper's
 // own domain. Used to decide when to drop a single wrapper of a grouped pair.

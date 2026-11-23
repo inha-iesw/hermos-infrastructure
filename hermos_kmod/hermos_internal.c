@@ -163,7 +163,7 @@ int hermos_get_size_sub_info_htable(struct topic_wrapper * wrapper)
   return count;
 }
 
-int hermos_get_size_pub_info_htable(struct topic_wrapper * wrapper)
+int hermos_get_size_pub_info_htable(const struct topic_wrapper * wrapper)
 {
   int count = 0;
   struct publisher_info * pub_info;

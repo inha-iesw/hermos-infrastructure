@@ -29,6 +29,24 @@ struct mempool_entry
 int init_memory_allocator(void);
 void cleanup_memory_allocator(void);
 struct mempool_entry * assign_memory(const pid_t pid);
-int reference_memory(struct mempool_entry * mempool_entry, const pid_t pid);
+/**
+ * @brief Query an existing process mapping without changing its lifetime.
+ * @param pool Non-null live pool; caller must prevent pool reuse/reference removal.
+ * @param pid Process whose mapping is queried.
+ * @return True if the mapping already exists.
+ */
+bool is_memory_referenced(struct mempool_entry * pool, pid_t pid);
+/**
+ * @brief Atomically add a process to a batch of pool mappings.
+ * @param pools Non-null array of count live pools; the caller keeps the pools alive.
+ * @param count Number of pool entries, possibly including duplicates.
+ * @param pid Process acquiring the mappings.
+ * @param capacity Maximum number of new mappings the caller can report.
+ * @param added Non-null output array of count flags; true only for newly added mappings.
+ * @return Zero on success, or a negative errno with no mappings changed.
+ */
+int reference_memory_batch(
+  struct mempool_entry * const * pools, uint32_t count, pid_t pid, uint32_t capacity,
+  bool * added);
 void free_memory(const pid_t pid);
 void exit_memory_allocator(void);

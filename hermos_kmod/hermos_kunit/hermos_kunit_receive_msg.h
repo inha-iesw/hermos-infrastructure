@@ -33,7 +33,8 @@
     KUNIT_CASE(test_case_receive_msg_pub_shm_info_buffer_too_small),                                  \
     KUNIT_CASE(test_case_receive_msg_ignore_local_same_pid_enabled),                                  \
     KUNIT_CASE(test_case_receive_msg_ignore_local_same_pid_disabled), \
-    KUNIT_CASE(test_case_receive_msg_wrong_owner)
+    KUNIT_CASE(test_case_receive_msg_wrong_owner), \
+    KUNIT_CASE(test_case_receive_msg_partial_core_failure_rolls_back)
 
 void test_case_receive_msg_no_topic_when_receive(struct kunit * test);
 void test_case_receive_msg_no_subscriber_when_receive(struct kunit * test);
@@ -68,3 +69,4 @@ void test_case_receive_msg_ignore_local_same_pid_disabled(struct kunit * test);
 
 void test_case_receive_msg_wrong_owner(struct kunit * test);
 
+void test_case_receive_msg_partial_core_failure_rolls_back(struct kunit * test);

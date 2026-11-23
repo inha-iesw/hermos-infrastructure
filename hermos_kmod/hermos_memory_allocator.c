@@ -150,33 +150,88 @@ struct mempool_entry * assign_memory(const pid_t pid)
   return result;
 }
 
-int reference_memory(struct mempool_entry * mempool_entry, const pid_t pid)
+bool is_memory_referenced(struct mempool_entry * pool, pid_t pid)
 {
-  struct mapped_pid_entry * new_entry;
-  struct mapped_pid_entry * entry;
+  bool found = false;
   unsigned long flags;
-
-  // Allocate outside spinlock because kmalloc with GFP_KERNEL may sleep
-  new_entry = kmalloc(sizeof(*new_entry), GFP_KERNEL);
-  if (!new_entry) {
-    return -ENOMEM;
-  }
-  new_entry->pid = pid;
-
+  struct mapped_pid_entry * entry;
   spin_lock_irqsave(&mempool_lock, flags);
-  list_for_each_entry(entry, &mempool_entry->mapped_pid_head, list)
+  list_for_each_entry(entry, &pool->mapped_pid_head, list)
   {
     if (entry->pid == pid) {
-      spin_unlock_irqrestore(&mempool_lock, flags);
-      kfree(new_entry);
-      return -EEXIST;
+      found = true;
+      break;
     }
   }
-  list_add(&new_entry->list, &mempool_entry->mapped_pid_head);
-  mempool_entry->mapped_num++;
   spin_unlock_irqrestore(&mempool_lock, flags);
+  return found;
+}
 
-  return 0;
+int reference_memory_batch(
+  struct mempool_entry * const * pools, uint32_t count, pid_t pid, uint32_t capacity,
+  bool * added)
+{
+  if (!count) return 0;
+  int ret = 0;
+  uint32_t new_count = 0;
+  unsigned long flags;
+  memset(added, 0, count * sizeof(*added));
+  struct mapped_pid_entry ** pending = kcalloc(count, sizeof(*pending), GFP_KERNEL);
+  if (!pending) return -ENOMEM;
+
+  // Dedupe and allocate before taking the spinlock. A null slot denotes a duplicate;
+  // allocation failure returns before the locked capacity check or any list update.
+  for (uint32_t i = 0; i < count; ++i) {
+    bool duplicate = false;
+    for (uint32_t j = 0; j < i; ++j) {
+      if (pools[j] == pools[i]) {
+        duplicate = true;
+        break;
+      }
+    }
+    if (duplicate) continue;
+    pending[i] = kmalloc(sizeof(*pending[i]), GFP_KERNEL);
+    if (!pending[i]) {
+      ret = -ENOMEM;
+      goto free_pending;
+    }
+    pending[i]->pid = pid;
+  }
+
+  spin_lock_irqsave(&mempool_lock, flags);
+  for (uint32_t i = 0; i < count; ++i) {
+    if (!pending[i]) continue;
+    bool exists = false;
+    struct mapped_pid_entry * entry;
+    list_for_each_entry(entry, &pools[i]->mapped_pid_head, list)
+    {
+      if (entry->pid == pid) {
+        exists = true;
+        break;
+      }
+    }
+    if (exists) continue;
+    added[i] = true;
+    if (++new_count > capacity) {
+      ret = -ENOBUFS;
+      goto unlock;
+    }
+  }
+
+  for (uint32_t i = 0; i < count; ++i) {
+    if (!added[i]) continue;
+    list_add(&pending[i]->list, &pools[i]->mapped_pid_head);
+    pools[i]->mapped_num++;
+    pending[i] = NULL;
+  }
+
+unlock:
+  spin_unlock_irqrestore(&mempool_lock, flags);
+free_pending:
+  for (uint32_t i = 0; i < count; ++i) kfree(pending[i]);
+  kfree(pending);
+  if (ret) memset(added, 0, count * sizeof(*added));
+  return ret;
 }
 
 void free_memory(const pid_t pid)

@@ -140,3 +140,88 @@ void test_case_init_memory_allocator_overflow_add(struct kunit * test)
 
   restore_params(&saved);
 }
+
+void test_case_memory_batch_capacity_failure_is_atomic(struct kunit * test)
+{
+  struct mempool_entry * pools[2] = {assign_memory(1000), assign_memory(1001)};
+  KUNIT_ASSERT_NOT_NULL(test, pools[0]);
+  KUNIT_ASSERT_NOT_NULL(test, pools[1]);
+  bool added[2] = {};
+  KUNIT_EXPECT_EQ(test, reference_memory_batch(pools, 2, 2000, 1, added), -ENOBUFS);
+  KUNIT_EXPECT_FALSE(test, is_memory_referenced(pools[0], 2000));
+  KUNIT_EXPECT_FALSE(test, is_memory_referenced(pools[1], 2000));
+  KUNIT_EXPECT_FALSE(test, added[0]);
+  KUNIT_EXPECT_FALSE(test, added[1]);
+  KUNIT_ASSERT_EQ(test, reference_memory_batch(pools, 2, 2000, 2, added), 0);
+  KUNIT_EXPECT_TRUE(test, added[0]);
+  KUNIT_EXPECT_TRUE(test, added[1]);
+  KUNIT_EXPECT_EQ(test, pools[0]->mapped_num, 2u);
+  KUNIT_EXPECT_EQ(test, pools[1]->mapped_num, 2u);
+}
+
+void test_case_memory_batch_existing_and_duplicate_pools(struct kunit * test)
+{
+  struct mempool_entry * first = assign_memory(1000);
+  struct mempool_entry * second = assign_memory(1001);
+  struct mempool_entry * third = assign_memory(1002);
+  KUNIT_ASSERT_NOT_NULL(test, first);
+  KUNIT_ASSERT_NOT_NULL(test, second);
+  KUNIT_ASSERT_NOT_NULL(test, third);
+  bool initial_added;
+  KUNIT_ASSERT_EQ(test, reference_memory_batch(&first, 1, 2000, 1, &initial_added), 0);
+  KUNIT_ASSERT_TRUE(test, initial_added);
+  struct mempool_entry * pools[6] = {first, second, first, third, second, third};
+  bool added[6] = {};
+  KUNIT_ASSERT_EQ(test, reference_memory_batch(pools, 6, 2000, 1, added), -ENOBUFS);
+  for (size_t i = 0; i < ARRAY_SIZE(added); ++i) KUNIT_EXPECT_FALSE(test, added[i]);
+  KUNIT_EXPECT_EQ(test, first->mapped_num, 2u);
+  KUNIT_EXPECT_EQ(test, second->mapped_num, 1u);
+  KUNIT_EXPECT_EQ(test, third->mapped_num, 1u);
+  KUNIT_ASSERT_EQ(test, reference_memory_batch(pools, 6, 2000, 2, added), 0);
+  KUNIT_EXPECT_FALSE(test, added[0]);
+  KUNIT_EXPECT_TRUE(test, added[1]);
+  KUNIT_EXPECT_FALSE(test, added[2]);
+  KUNIT_EXPECT_TRUE(test, added[3]);
+  KUNIT_EXPECT_FALSE(test, added[4]);
+  KUNIT_EXPECT_FALSE(test, added[5]);
+  KUNIT_EXPECT_EQ(test, first->mapped_num, 2u);
+  KUNIT_EXPECT_EQ(test, second->mapped_num, 2u);
+  KUNIT_EXPECT_EQ(test, third->mapped_num, 2u);
+  KUNIT_ASSERT_EQ(test, reference_memory_batch(pools, 6, 2000, 0, added), 0);
+  for (size_t i = 0; i < ARRAY_SIZE(added); ++i) KUNIT_EXPECT_FALSE(test, added[i]);
+}
+
+void test_case_exited_publisher_pool_waits_for_subscriber_exit(struct kunit * test)
+{
+  // Restrict assignment to one already initialized pool. Restore the limit even
+  // on allocation failure so the suite teardown still visits every pool.
+  int saved_pool_num = mempool_num;
+  struct mempool_entry * pool;
+  bool added;
+  int ret;
+
+  mempool_num = 1;
+  pool = assign_memory(1000);
+  KUNIT_EXPECT_NOT_NULL(test, pool);
+  if (!pool) goto restore;
+
+  ret = reference_memory_batch(&pool, 1, 2000, 1, &added);
+  KUNIT_EXPECT_EQ(test, ret, 0);
+  if (ret) goto restore;
+  KUNIT_EXPECT_TRUE(test, added);
+
+  free_memory(1000);
+  KUNIT_EXPECT_EQ(test, pool->mapped_num, 1u);
+  KUNIT_EXPECT_TRUE(test, is_memory_referenced(pool, 2000));
+  KUNIT_EXPECT_PTR_EQ(test, assign_memory(3000), NULL);
+
+  free_memory(2000);
+  KUNIT_EXPECT_EQ(test, pool->mapped_num, 0u);
+  KUNIT_EXPECT_PTR_EQ(test, assign_memory(3000), pool);
+
+restore:
+  free_memory(1000);
+  free_memory(2000);
+  free_memory(3000);
+  mempool_num = saved_pool_num;
+}

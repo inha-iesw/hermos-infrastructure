@@ -3,6 +3,7 @@
 
 #include "../hermos.h"
 #include "../hermos_memory_allocator.h"
+#include "../observation/endpoint_stats.h"
 
 #include <kunit/test.h>
 #include <linux/delay.h>
@@ -963,6 +964,13 @@ void test_case_receive_msg_pub_shm_info_buffer_too_small(struct kunit * test)
   setup_one_publisher(
     test, publisher_pid2, qos_depth, is_transient_local, &publisher_id2, &ret_addr2);
 
+  union ioctl_publish_msg_args published = {};
+  KUNIT_ASSERT_EQ(test, hermos_ioctl_publish_msg(
+    TOPIC_NAME, current->nsproxy->ipc_ns, publisher_id1, ret_addr1, subscriber_ids_buf,
+    ARRAY_SIZE(subscriber_ids_buf), &published, publisher_pid1), 0);
+  const int64_t before = hermos_get_latest_received_entry_id(
+    TOPIC_NAME, current->nsproxy->ipc_ns, subscriber_id);
+
   // Act: pass a buffer of size 1, but there are 2 publishers to map
   struct publisher_shm_info pub_shm_infos[1] = {0};
   union ioctl_receive_msg_args ioctl_receive_msg_ret;
@@ -972,6 +980,24 @@ void test_case_receive_msg_pub_shm_info_buffer_too_small(struct kunit * test)
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret, -ENOBUFS);
+  KUNIT_EXPECT_EQ(test, hermos_get_entry_rc(
+    TOPIC_NAME, current->nsproxy->ipc_ns, published.ret_entry_id, subscriber_id), 0);
+  KUNIT_EXPECT_EQ(test, hermos_get_latest_received_entry_id(
+    TOPIC_NAME, current->nsproxy->ipc_ns, subscriber_id), before);
+  KUNIT_EXPECT_EQ(test, ioctl_receive_msg_ret.ret_entry_num, 0);
+  struct publisher_shm_info retry_info[2] = {};
+  KUNIT_ASSERT_EQ(test, hermos_ioctl_receive_msg(
+    TOPIC_NAME, current->nsproxy->ipc_ns, subscriber_id, retry_info, 2,
+    &ioctl_receive_msg_ret, subscriber_pid), 0);
+  KUNIT_ASSERT_EQ(test, ioctl_receive_msg_ret.ret_pub_shm_num, 2u);
+  KUNIT_EXPECT_NE(test, retry_info[0].pid, retry_info[1].pid);
+  KUNIT_EXPECT_TRUE(
+    test, retry_info[0].pid == publisher_pid1 || retry_info[0].pid == publisher_pid2);
+  KUNIT_EXPECT_TRUE(
+    test, retry_info[1].pid == publisher_pid1 || retry_info[1].pid == publisher_pid2);
+  KUNIT_ASSERT_EQ(test, ioctl_receive_msg_ret.ret_entry_num, 1);
+  KUNIT_EXPECT_EQ(test, ioctl_receive_msg_ret.ret_entry_ids[0], published.ret_entry_id);
+
 }
 
 // ================================================
@@ -1092,3 +1118,49 @@ void test_case_receive_msg_wrong_owner(struct kunit * test)
     TOPIC_NAME, current->nsproxy->ipc_ns, subscriber_id), published.ret_entry_id);
 }
 
+void test_case_receive_msg_partial_core_failure_rolls_back(struct kunit * test)
+{
+  topic_local_id_t subscriber_id, publisher_id;
+  uint64_t addr;
+  setup_one_subscriber(test, 2000, 10, false, &subscriber_id);
+  setup_one_publisher(test, 1000, 10, false, &publisher_id, &addr);
+  union ioctl_publish_msg_args baseline = {};
+  KUNIT_ASSERT_EQ(test, hermos_ioctl_publish_msg(
+    TOPIC_NAME, current->nsproxy->ipc_ns, publisher_id, addr, subscriber_ids_buf,
+    ARRAY_SIZE(subscriber_ids_buf), &baseline, 1000), 0);
+  union ioctl_receive_msg_args result = {};
+  struct publisher_shm_info info[1] = {};
+  KUNIT_ASSERT_EQ(test, hermos_ioctl_receive_msg(
+    TOPIC_NAME, current->nsproxy->ipc_ns, subscriber_id, info, 1, &result, 2000), 0);
+  KUNIT_ASSERT_EQ(test, result.ret_entry_num, 1);
+  const int64_t before = hermos_get_latest_received_entry_id(
+    TOPIC_NAME, current->nsproxy->ipc_ns, subscriber_id);
+  union ioctl_publish_msg_args first = {}, second = {};
+  KUNIT_ASSERT_EQ(test, hermos_ioctl_publish_msg(
+    TOPIC_NAME, current->nsproxy->ipc_ns, publisher_id, addr + 8, subscriber_ids_buf,
+    ARRAY_SIZE(subscriber_ids_buf), &first, 1000), 0);
+  KUNIT_ASSERT_EQ(test, hermos_ioctl_publish_msg(
+    TOPIC_NAME, current->nsproxy->ipc_ns, publisher_id, addr + 16, subscriber_ids_buf,
+    ARRAY_SIZE(subscriber_ids_buf), &second, 1000), 0);
+  KUNIT_ASSERT_EQ(test, hermos_increment_message_entry_rc(
+    TOPIC_NAME, current->nsproxy->ipc_ns, subscriber_id, second.ret_entry_id), 0);
+  struct endpoint_stats_ret stats_before = {}, stats_after = {};
+  uint32_t count = 0;
+  KUNIT_ASSERT_EQ(test, hermos_get_endpoint_stats(
+    TOPIC_NAME, current->nsproxy->ipc_ns, 0, false, &stats_before, 1, &count), 0);
+  KUNIT_ASSERT_EQ(test, count, 1U);
+  KUNIT_ASSERT_EQ(test, stats_before.received_total, (uint64_t)1);
+  KUNIT_EXPECT_EQ(test, hermos_ioctl_receive_msg(
+    TOPIC_NAME, current->nsproxy->ipc_ns, subscriber_id, info, 1, &result, 2000), -EALREADY);
+  KUNIT_EXPECT_EQ(test, hermos_get_entry_rc(
+    TOPIC_NAME, current->nsproxy->ipc_ns, first.ret_entry_id, subscriber_id), 0);
+  KUNIT_EXPECT_EQ(test, hermos_get_entry_rc(
+    TOPIC_NAME, current->nsproxy->ipc_ns, second.ret_entry_id, subscriber_id), 1);
+  KUNIT_EXPECT_EQ(test, hermos_get_latest_received_entry_id(
+    TOPIC_NAME, current->nsproxy->ipc_ns, subscriber_id), before);
+  KUNIT_EXPECT_EQ(test, result.ret_entry_num, 0);
+  KUNIT_ASSERT_EQ(test, hermos_get_endpoint_stats(
+    TOPIC_NAME, current->nsproxy->ipc_ns, 0, false, &stats_after, 1, &count), 0);
+  KUNIT_ASSERT_EQ(test, count, 1U);
+  KUNIT_EXPECT_EQ(test, stats_after.received_total, stats_before.received_total);
+}

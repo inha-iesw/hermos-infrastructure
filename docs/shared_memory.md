@@ -68,3 +68,17 @@ The mempool size per process can be configured when loading the kernel module. S
 ## Known issues
 
 - The current implementation suppose that the memory after 0x40000000000 is always allocatable, though it is not investigated in detail.
+
+### Process pool lifetime
+
+A mapping of another process's pool remains owned by the mapping process until
+that process exits. Releasing the last message or destroying a subscription does
+not unmap the pool. If a publisher exits while a long-lived subscriber has mapped
+its pool, that pool cannot be assigned to a new process until the subscriber exits.
+Size `mempool_num` for the cumulative distinct process pools mapped during a
+subscriber's lifetime, including publisher restarts, not just simultaneously live
+publishers. Exhaustion causes `ADD_PROCESS` to fail with `ENOMEM`. Restart the
+participating workload together when reclaiming these mappings; kernel-only
+reuse would invalidate userspace mappings. Individual pool reclamation requires
+a coordinated unmap-and-release protocol that is not currently implemented.
+

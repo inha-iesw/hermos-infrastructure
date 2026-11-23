@@ -31,7 +31,9 @@
     KUNIT_CASE(test_case_take_msg_with_exited_publisher),                                         \
     KUNIT_CASE(test_case_take_msg_ignore_local_same_pid_enabled),                                 \
     KUNIT_CASE(test_case_take_msg_ignore_local_same_pid_disabled), \
-    KUNIT_CASE(test_case_take_msg_wrong_owner)
+    KUNIT_CASE(test_case_take_msg_wrong_owner), \
+    KUNIT_CASE(test_case_take_msg_mapping_failure_retry), \
+    KUNIT_CASE(test_case_take_msg_mapping_failure_keeps_existing_reference)
 
 void test_case_take_msg_no_topic(struct kunit * test);
 void test_case_take_msg_no_subscriber(struct kunit * test);
@@ -66,4 +68,6 @@ void test_case_take_msg_ignore_local_same_pid_disabled(struct kunit * test);
 
 void test_case_take_msg_wrong_owner(struct kunit * test);
 
+void test_case_take_msg_mapping_failure_retry(struct kunit * test);
 
+void test_case_take_msg_mapping_failure_keeps_existing_reference(struct kunit * test);

@@ -595,74 +595,69 @@ static int set_publisher_shm_info(
   struct publisher_shm_info * pub_shm_infos, uint32_t pub_shm_infos_size,
   uint32_t * ret_pub_shm_num)
 {
-  uint32_t publisher_num = 0;
+  int ret = -ENOMEM;
+  uint32_t candidate_num = 0;
+  *ret_pub_shm_num = 0;
+  const uint32_t publisher_num = hermos_get_size_pub_info_htable(wrapper);
+  if (!publisher_num) return 0;
+  struct mempool_entry ** pools = kcalloc(publisher_num, sizeof(*pools), GFP_KERNEL);
+  struct publisher_shm_info * candidates =
+    kvcalloc(publisher_num, sizeof(*candidates), GFP_KERNEL);
+  bool * added = kcalloc(publisher_num, sizeof(*added), GFP_KERNEL);
+  if (!pools || !candidates || !added) goto free_buffers;
+
   struct publisher_info * pub_info;
   int bkt;
   hash_for_each(wrapper->topic->pub_info_htable, bkt, pub_info, node)
   {
-    if (subscriber_pid == pub_info->pid) {
+    if (subscriber_pid == pub_info->pid) continue;
+    if (!hermos_domain_delivery_allowed(wrapper->topic, pub_info->domain_id, wrapper->domain_id))
       continue;
-    }
-
-    // A subscriber only reads from publishers that deliver to it; a one-way
-    // bridge rule can exclude opposite-domain publishers, so skip mapping them.
-    if (!hermos_domain_delivery_allowed(wrapper->topic, pub_info->domain_id, wrapper->domain_id)) {
-      continue;
-    }
 
     const struct process_info * proc_info = hermos_find_process_info(pub_info->pid);
-    if (!proc_info || proc_info->exited) {
-      continue;
-    }
+    if (!proc_info || proc_info->exited) continue;
+    // The global read lock prevents process-exit removal of an existing mapping.
+    // No local PID conversion is needed for a pool already mapped by this process.
+    if (is_memory_referenced(proc_info->mempool_entry, subscriber_pid)) continue;
 
-    int ret = reference_memory(proc_info->mempool_entry, subscriber_pid);
-    if (ret < 0) {
-      if (ret == -EEXIST) {
-        continue;
-      } else if (ret == -ENOMEM) {
-        dev_warn(
-          hermos_device,
-          "Failed to allocate memory for mapping from pid=%d to process (pid=%d)'s memory pool. "
-          "(%s)\n",
-          subscriber_pid, pub_info->pid, __func__);
-        return ret;
-      } else {
-        dev_warn(
-          hermos_device,
-          "Unreachable: process (pid=%d) failed to reference memory of (pid=%d). "
-          "(%s)\n",
-          subscriber_pid, pub_info->pid, __func__);
-        return ret;
+    bool duplicate = false;
+    for (uint32_t i = 0; i < candidate_num; ++i) {
+      if (pools[i] == proc_info->mempool_entry) {
+        duplicate = true;
+        break;
       }
     }
-
-    if (publisher_num == pub_shm_infos_size) {
-      dev_warn(
-        hermos_device,
-        "The number of publisher processes to be mapped exceeds the buffer size "
-        "(pub_shm_infos_size=%u, topic_name=%s, subscriber_pid=%d). (%s)\n",
-        pub_shm_infos_size, wrapper->key, subscriber_pid, __func__);
-      return -ENOBUFS;
-    }
+    if (duplicate) continue;
 
 #ifndef KUNIT_BUILD
     const pid_t local_pid = convert_pid_to_local(pub_info->pid);
-    if (local_pid == -1) {
-      return -ESRCH;
+    if (local_pid <= 0) {
+      ret = -ESRCH;
+      goto free_buffers;
     }
-    pub_shm_infos[publisher_num].pid = local_pid;
 #else
-    pub_shm_infos[publisher_num].pid = pub_info->pid;
+    const pid_t local_pid = pub_info->pid;
 #endif
-
-    pub_shm_infos[publisher_num].shm_addr = proc_info->mempool_entry->addr;
-    pub_shm_infos[publisher_num].shm_size = mempool_size_bytes;
-    publisher_num++;
+    pools[candidate_num] = proc_info->mempool_entry;
+    candidates[candidate_num].pid = local_pid;
+    candidates[candidate_num].shm_addr = proc_info->mempool_entry->addr;
+    candidates[candidate_num].shm_size = mempool_size_bytes;
+    candidate_num++;
   }
 
-  *ret_pub_shm_num = publisher_num;
+  // Commit only after every metadata field is ready. Other topics of this process
+  // must never observe a mapping that is subsequently rolled back on error.
+  ret = reference_memory_batch(pools, candidate_num, subscriber_pid, pub_shm_infos_size, added);
+  if (ret) goto free_buffers;
+  for (uint32_t i = 0; i < candidate_num; ++i) {
+    if (added[i]) pub_shm_infos[(*ret_pub_shm_num)++] = candidates[i];
+  }
 
-  return 0;
+free_buffers:
+  kfree(added);
+  kvfree(candidates);
+  kfree(pools);
+  return ret;
 }
 
 int hermos_ioctl_get_version(struct ioctl_get_version_args * ioctl_ret)
@@ -1171,9 +1166,12 @@ int hermos_ioctl_receive_msg(
     goto unlock_all;
   }
 
+  const int64_t previous_entry_id = sub_info->latest_received_entry_id;
+  const uint64_t previous_received_total = sub_info->received_total;
+  ioctl_ret->ret_pub_shm_num = 0;
   ret = receive_msg_core(wrapper, sub_info, subscriber_id, ioctl_ret);
   if (ret < 0) {
-    goto unlock_all;
+    goto rollback;
   }
 
   // Check if there is any publisher that need to be mmapped
@@ -1185,10 +1183,22 @@ int hermos_ioctl_receive_msg(
   ret = set_publisher_shm_info(
     wrapper, sub_info->pid, pub_shm_infos, pub_shm_infos_size, &ioctl_ret->ret_pub_shm_num);
   if (ret < 0) {
-    goto unlock_all;
+    goto rollback;
   }
 
   sub_info->need_mmap_update = false;
+  goto unlock_all;
+
+rollback:
+  for (uint16_t i = 0; i < ioctl_ret->ret_entry_num; ++i) {
+    struct entry_node * en = find_message_entry(wrapper, ioctl_ret->ret_entry_ids[i]);
+    clear_bit(subscriber_id, en->referencing_subscribers);
+  }
+  sub_info->latest_received_entry_id = previous_entry_id;
+  sub_info->received_total = previous_received_total;
+  ioctl_ret->ret_entry_num = 0;
+  ioctl_ret->ret_call_again = false;
+  ioctl_ret->ret_pub_shm_num = 0;
 
 unlock_all:
   up_write(&wrapper->topic->rwsem);
@@ -1231,9 +1241,13 @@ int hermos_ioctl_take_msg(
     goto unlock_all;
   }
 
-  // These remains 0 if no message is found to take.
+  const int64_t previous_entry_id = sub_info->latest_received_entry_id;
+  const uint64_t previous_received_total = sub_info->received_total;
+  bool added_reference = false;
+  // These remain 0 if no message is found to take.
   ioctl_ret->ret_addr = 0;
   ioctl_ret->ret_entry_id = -1;
+  ioctl_ret->ret_pub_shm_num = 0;
 
   uint32_t searched_count = 0;
   struct entry_node * candidate_en = NULL;
@@ -1291,6 +1305,7 @@ int hermos_ioctl_take_msg(
       if (ret < 0) {
         goto unlock_all;
       }
+      added_reference = true;
       sub_info->received_total++;
     }
 
@@ -1309,6 +1324,12 @@ int hermos_ioctl_take_msg(
   ret = set_publisher_shm_info(
     wrapper, sub_info->pid, pub_shm_infos, pub_shm_infos_size, &ioctl_ret->ret_pub_shm_num);
   if (ret < 0) {
+    if (added_reference) clear_bit(subscriber_id, candidate_en->referencing_subscribers);
+    sub_info->latest_received_entry_id = previous_entry_id;
+    sub_info->received_total = previous_received_total;
+    ioctl_ret->ret_addr = 0;
+    ioctl_ret->ret_entry_id = -1;
+    ioctl_ret->ret_pub_shm_num = 0;
     goto unlock_all;
   }
 
