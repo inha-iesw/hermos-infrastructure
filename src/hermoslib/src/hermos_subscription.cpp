@@ -137,8 +137,8 @@ mqd_t open_mq_for_subscription(
   attr.mq_curmsgs = 0;  // Number of messages currently in the queue (not set by mq_open)
   attr.mq_maxmsg = 1;
 
-  const int mq_mode = 0666;
-  mqd_t mq = mq_open(mq_name.c_str(), O_CREAT | O_RDONLY | O_NONBLOCK, mq_mode, &attr);
+  const int mq_mode = 0600;
+  mqd_t mq = mq_open(mq_name.c_str(), O_CREAT | O_EXCL | O_RDONLY | O_NONBLOCK | O_CLOEXEC, mq_mode, &attr);
   if (mq == -1) {
     RCLCPP_ERROR_STREAM(
       logger, "mq_open failed for topic '" << topic_name << "' (subscriber_id=" << subscriber_id

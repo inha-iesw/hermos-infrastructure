@@ -184,6 +184,15 @@ if(BUILD_TESTING)
     ENVIRONMENT "GTEST_DEATH_TEST_STYLE=threadsafe"
   )
 
+  # Exercise real same-UID SHM/MQ objects without kernel ioctls or heap preloading.
+  ament_add_gtest(test_unit_ipc_access_${PROJECT_NAME}
+    test/unit/ipc/test_access.cpp)
+  target_include_directories(test_unit_ipc_access_${PROJECT_NAME} PRIVATE include src)
+  target_link_libraries(test_unit_ipc_access_${PROJECT_NAME} hermos)
+  ament_target_dependencies(test_unit_ipc_access_${PROJECT_NAME} rclcpp)
+  set_tests_properties(test_unit_ipc_access_${PROJECT_NAME} PROPERTIES
+    ENVIRONMENT "GTEST_DEATH_TEST_STYLE=fast")
+
   ament_add_gmock(test_unit_publisher_borrow_allocation_failure_${PROJECT_NAME}
     test/unit/test_publisher_borrow_allocation_failure.cpp)
   target_include_directories(test_unit_publisher_borrow_allocation_failure_${PROJECT_NAME}

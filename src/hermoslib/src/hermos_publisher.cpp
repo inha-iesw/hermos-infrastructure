@@ -1,4 +1,5 @@
 #include "hermos/hermos_publisher.hpp"
+#include "ipc/access.hpp"
 
 #include "hermos/bridge/hermos_bridge_node.hpp"
 #include "hermos/internal/type_registry_writer.hpp"
@@ -119,7 +120,7 @@ union ioctl_publish_msg_args publish_core(
       std::get<1>(t) = true;
     } else {
       const std::string mq_name = create_mq_name_for_hermos_publish(mq_topic_name, subscriber_id);
-      mq = mq_open(mq_name.c_str(), O_WRONLY | O_NONBLOCK);
+      mq = detail::open_private_notification_writer(mq_name.c_str());
       if (mq == -1) {
         // Right after a subscriber is added, its message queue has not been created yet. Therefore,
         // the `mq_open` call above might fail. In that case, we just continue.

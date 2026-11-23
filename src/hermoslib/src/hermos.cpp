@@ -1,4 +1,5 @@
 #include "hermos/hermos.hpp"
+#include "ipc/access.hpp"
 
 #include "hermos/hermos_ioctl.hpp"
 #include "hermos/hermos_mq.hpp"
@@ -12,6 +13,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cerrno>
 #include <cstdint>
 #include <cstring>
 #include <mutex>
@@ -56,8 +58,8 @@ void * map_area(
 {
   const std::string shm_name = create_shm_name(pid);
 
-  int oflag = writable ? O_CREAT | O_EXCL | O_RDWR : O_RDONLY;
-  const int shm_mode = 0666;
+  int oflag = (writable ? O_CREAT | O_EXCL | O_RDWR : O_RDONLY) | O_NOFOLLOW | O_CLOEXEC;
+  const int shm_mode = 0600;
   int shm_fd = shm_open(shm_name.c_str(), oflag, shm_mode);
   if (shm_fd == -1) {
     RCLCPP_ERROR(logger, "shm_open failed: %s", strerror(errno));
@@ -89,13 +91,20 @@ void * map_area(
       return nullptr;
     }
 
-    const int new_shm_mode = 0444;
+    const int new_shm_mode = 0400;
     if (fchmod(shm_fd, new_shm_mode) == -1) {
       RCLCPP_ERROR(logger, "fchmod failed: %s", strerror(errno));
       cleanup_shm_fd();
       close(hermos_fd);
       return nullptr;
     }
+  }
+
+  if (!detail::validate_private_heap(shm_fd, shm_size)) {
+    RCLCPP_ERROR(logger, "Rejected shared heap ownership, permissions or size: %s", strerror(errno));
+    cleanup_shm_fd();
+    close(hermos_fd);
+    return nullptr;
   }
 
   int prot = writable ? PROT_READ | PROT_WRITE : PROT_READ;
