@@ -114,7 +114,11 @@ class GenerateBridgePluginsVerb(VerbExtension):
         for t in types:
             t = t.strip()
             parts = t.split('/')
-            if len(parts) == 3 and parts[1] == expected_mid:
+            # Match ROS package/interface identifiers before substituting them
+            # into CMake, include paths and C++ type names.
+            if (len(parts) == 3 and parts[1] == expected_mid and
+                    re.fullmatch(r'(?!.*__)[a-z][a-z0-9_]*(?<!_)', parts[0]) and
+                    re.fullmatch(r'[A-Z][A-Za-z0-9]*', parts[2])):
                 valid_types.append(t)
             else:
                 print(f'Warning: Invalid {interface_type.name.lower()} type format: {t} (expected package/{expected_mid}/Type)', file=sys.stderr)
