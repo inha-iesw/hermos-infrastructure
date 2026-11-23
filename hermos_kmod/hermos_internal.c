@@ -30,6 +30,32 @@ const char * hermos_notify_mq_topic_name(const struct topic_wrapper * wrapper)
   return wrapper->topic->notify_mq_name;
 }
 
+void hermos_free_subscriber_info(struct subscriber_info *info)
+{
+  hermos_disconnect_subscriber_notify(info->notify);
+  kfree(info->node_name);
+  kfree(info);
+}
+
+static void save_exit_subscription(
+  struct topic_wrapper *wrapper, struct process_info *proc_info, topic_local_id_t subscriber_id)
+{
+  if (proc_info->exit_subscription_count >= MAX_SUBSCRIPTION_NUM_PER_PROCESS) {
+    dev_warn(hermos_device, "exit_subscription_list is full for pid=%d, subscription MQ may leak.\n",
+             proc_info->global_pid);
+    return;
+  }
+  struct exit_subscription_entry *exit_entry = kmalloc(sizeof(*exit_entry), GFP_KERNEL);
+  if (!exit_entry) {
+    dev_warn(hermos_device, "kmalloc failed for exit_subscription_entry, subscription MQ may leak.\n");
+    return;
+  }
+  strscpy(exit_entry->topic_name, hermos_notify_mq_topic_name(wrapper), TOPIC_NAME_BUFFER_SIZE);
+  exit_entry->subscriber_id = subscriber_id;
+  list_add_tail(&exit_entry->list, &proc_info->exit_subscription_list);
+  proc_info->exit_subscription_count++;
+}
+
 static void pre_handler_subscriber_exit(
   struct topic_wrapper * wrapper, const pid_t pid, struct process_info * proc_info)
 {
@@ -42,34 +68,11 @@ static void pre_handler_subscriber_exit(
 
     const topic_local_id_t subscriber_id = sub_info->id;
 
-    // Save subscription info for daemon cleanup before deleting the subscriber
-    if (proc_info->exit_subscription_count >= MAX_SUBSCRIPTION_NUM_PER_PROCESS) {
-      dev_warn(
-        hermos_device,
-        "exit_subscription_list is full for pid=%d, subscription MQ may leak. "
-        "(%s)\n",
-        pid, __func__);
-    } else {
-      struct exit_subscription_entry * exit_entry =
-        kmalloc(sizeof(struct exit_subscription_entry), GFP_KERNEL);
-      if (exit_entry) {
-        strscpy(
-          exit_entry->topic_name, hermos_notify_mq_topic_name(wrapper), TOPIC_NAME_BUFFER_SIZE);
-        exit_entry->subscriber_id = subscriber_id;
-        list_add_tail(&exit_entry->list, &proc_info->exit_subscription_list);
-        proc_info->exit_subscription_count++;
-      } else {
-        dev_warn(
-          hermos_device,
-          "kmalloc failed for exit_subscription_entry, subscription MQ may leak. "
-          "(%s)\n",
-          __func__);
-      }
-    }
+    if (!sub_info->is_take_sub && !sub_info->notify)
+      save_exit_subscription(wrapper, proc_info, subscriber_id);
 
     hash_del(&sub_info->node);
-    kfree(sub_info->node_name);
-    kfree(sub_info);
+    hermos_free_subscriber_info(sub_info);
 
     if (subscriber_id < 0 || subscriber_id >= MAX_TOPIC_LOCAL_ID) {
       dev_warn(
@@ -224,8 +227,7 @@ void hermos_release_topic_wrapper(struct topic_wrapper * wrapper)
     hash_for_each_safe(wrapper->topic->sub_info_htable, bkt_sub, tmp_sub, sub_info, node)
     {
       hash_del(&sub_info->node);
-      kfree(sub_info->node_name);
-      kfree(sub_info);
+      hermos_free_subscriber_info(sub_info);
     }
 
     kfree(wrapper->topic);

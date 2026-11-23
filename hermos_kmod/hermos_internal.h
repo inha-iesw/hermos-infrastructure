@@ -3,6 +3,7 @@
 
 #include "hermos.h"
 #include "hermos_memory_allocator.h"
+#include "notification/subscriber_fd.h"
 
 #include <linux/cred.h>
 #include <linux/device.h>
@@ -130,8 +131,14 @@ struct subscriber_info
   bool ignore_local_publications;
   bool need_mmap_update;
   bool is_bridge;
+  struct hermos_subscriber_notify *notify;
   struct hlist_node node;
 };
+
+struct file *hermos_bind_subscriber_notify(
+  const char *topic, const struct ipc_namespace *ipc_ns, pid_t pid, topic_local_id_t id);
+
+void hermos_free_subscriber_info(struct subscriber_info *info);
 
 // Helper to copy a name_info string from userspace to a kernel stack buffer.
 // Returns 0 on success, -EINVAL if too long, -EFAULT on copy failure.

@@ -11,8 +11,10 @@
     KUNIT_CASE(test_case_add_subscriber_requires_registration), \
     KUNIT_CASE(test_case_add_subscriber_rejects_exited_process), \
     KUNIT_CASE(test_case_add_subscriber_rejects_namespace_mismatch), \
+    KUNIT_CASE(test_case_subscriber_notify_lifecycle),             \
     KUNIT_CASE(test_case_add_subscriber_rejects_zero_depth)
 
+void test_case_subscriber_notify_lifecycle(struct kunit *test);
 void test_case_add_subscriber_normal(struct kunit * test);
 void test_case_add_subscriber_too_many_subscribers(struct kunit * test);
 void test_case_add_subscriber_domain_isolation(struct kunit * test);

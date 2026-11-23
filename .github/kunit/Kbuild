@@ -18,6 +18,7 @@ hermos_kunit-objs := \
   hermos_exit.o \
   hermos_ioctl.o \
   hermos_internal.o \
+  notification/subscriber_fd.o \
   observation/endpoint_stats.o
 
 include $(src)/hermos_kunit/Makefile.inc

@@ -109,6 +109,7 @@ jobs:
           mkdir -p "${dst}/observation" "${dst}/hermos_kunit/observation"
           cp hermos_kmod/*.c hermos_kmod/*.h "${dst}/"
           cp hermos_kmod/observation/*.[ch] "${dst}/observation/"
+          install -D -m 644 -t "${dst}/notification" hermos_kmod/notification/*.[ch]
           cp hermos_kmod/hermos_kunit/*.c \
              hermos_kmod/hermos_kunit/*.h \
              hermos_kmod/hermos_kunit/Makefile.inc \

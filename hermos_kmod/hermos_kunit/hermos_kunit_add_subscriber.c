@@ -5,6 +5,8 @@
 #include "../hermos_memory_allocator.h"
 
 #include <kunit/test.h>
+#include <linux/file.h>
+#include <linux/poll.h>
 #include <linux/string.h>
 
 static const char * TOPIC_NAME = "/kunit_test_topic";
@@ -195,3 +197,54 @@ void test_case_add_subscriber_rejects_namespace_mismatch(struct kunit * test)
   KUNIT_EXPECT_EQ(test, hermos_get_topic_num(current->nsproxy->ipc_ns), 0);
 }
 
+void test_case_subscriber_notify_lifecycle(struct kunit *test)
+{
+  const pid_t owner = 2110;
+  struct ipc_namespace *ns = current->nsproxy->ipc_ns;
+  union ioctl_add_process_args app;
+  union ioctl_add_subscriber_args sub, mq, take;
+  union ioctl_add_publisher_args pub;
+  union ioctl_publish_msg_args sent;
+  topic_local_id_t *ids = kunit_kcalloc(test, MAX_SUBSCRIBER_NUM, sizeof(*ids), GFP_KERNEL);
+  KUNIT_ASSERT_NOT_NULL(test, ids);
+  KUNIT_ASSERT_EQ(test, hermos_ioctl_add_process(owner, ns, false, 0, &app), 0);
+  KUNIT_ASSERT_EQ(test, hermos_ioctl_add_publisher(
+    TOPIC_NAME, ns, NODE_NAME, owner, 2, false, false, &pub), 0);
+  KUNIT_ASSERT_EQ(test, hermos_ioctl_add_subscriber(
+    TOPIC_NAME, ns, NODE_NAME, owner, 2, false, true, false, false, false, &sub), 0);
+  KUNIT_ASSERT_EQ(test, hermos_ioctl_add_subscriber(
+    TOPIC_NAME, ns, NODE_NAME, owner, 2, false, true, false, false, false, &mq), 0);
+  KUNIT_ASSERT_EQ(test, hermos_ioctl_add_subscriber(
+    TOPIC_NAME, ns, NODE_NAME, owner, 2, false, true, true, false, false, &take), 0);
+
+  KUNIT_EXPECT_EQ(test, PTR_ERR(hermos_bind_subscriber_notify("/absent", ns, owner, sub.ret_id)),
+                  (long)-ENOENT);
+  KUNIT_EXPECT_EQ(test, PTR_ERR(hermos_bind_subscriber_notify(TOPIC_NAME, ns, owner + 1, sub.ret_id)),
+                  (long)-EPERM);
+  KUNIT_EXPECT_EQ(test, PTR_ERR(hermos_bind_subscriber_notify(TOPIC_NAME, ns, owner, take.ret_id)),
+                  (long)-EOPNOTSUPP);
+  struct file *file = hermos_bind_subscriber_notify(TOPIC_NAME, ns, owner, sub.ret_id);
+  KUNIT_ASSERT_NOT_ERR_OR_NULL(test, file);
+  KUNIT_EXPECT_EQ(test, PTR_ERR(hermos_bind_subscriber_notify(TOPIC_NAME, ns, owner, sub.ret_id)),
+                  (long)-EALREADY);
+
+  KUNIT_EXPECT_TRUE(test, vfs_poll(file, NULL) & EPOLLIN);
+  KUNIT_EXPECT_EQ(test, hermos_take_subscriber_notify(file->private_data), (ssize_t)sizeof(u64));
+  KUNIT_EXPECT_EQ(test, vfs_poll(file, NULL), (__poll_t)0);
+  for (int i = 0; i < 2; ++i) {
+    int err = hermos_ioctl_publish_msg(
+      TOPIC_NAME, ns, pub.ret_id, app.ret_addr + i, ids, MAX_SUBSCRIBER_NUM, &sent, owner);
+    KUNIT_EXPECT_EQ(test, err, 0);
+    if (!err) {
+      KUNIT_EXPECT_EQ(test, sent.ret_subscriber_num, 1u);
+      KUNIT_EXPECT_EQ(test, ids[0], mq.ret_id);
+    }
+  }
+  KUNIT_EXPECT_TRUE(test, vfs_poll(file, NULL) & EPOLLIN);
+  KUNIT_EXPECT_EQ(test, hermos_take_subscriber_notify(file->private_data), (ssize_t)sizeof(u64));
+  KUNIT_EXPECT_EQ(test, file->f_op->read(file, NULL, sizeof(u64), &file->f_pos), (ssize_t)-EAGAIN);
+  KUNIT_EXPECT_EQ(test, hermos_ioctl_remove_subscriber(TOPIC_NAME, ns, sub.ret_id, owner), 0);
+  KUNIT_EXPECT_TRUE(test, vfs_poll(file, NULL) & EPOLLHUP);
+  KUNIT_EXPECT_EQ(test, file->f_op->read(file, NULL, sizeof(u64), &file->f_pos), (ssize_t)0);
+  fput(file);
+}

@@ -7,7 +7,7 @@ cd "${workspace_dir}"
 source "/opt/ros/${ROS_DISTRO:-humble}/setup.bash"
 
 verify_dir="${workspace_dir}/build/verify"
-mkdir -p "${verify_dir}/kmod/observation"
+mkdir -p "${verify_dir}/kmod/observation" "${verify_dir}/kmod/notification"
 export CMAKE_BUILD_PARALLEL_LEVEL=2
 export MAKEFLAGS="${MAKEFLAGS:--j2}"
 export ROS_LOG_DIR="${workspace_dir}/log/verify/ros"
@@ -31,6 +31,7 @@ export CARGO_TARGET_DIR="${verify_dir}/cie-rust"
 # Compile both module names in an isolated directory; never load either module.
 cp hermos_kmod/*.[ch] hermos_kmod/Makefile hermos_kmod/version.txt "${verify_dir}/kmod/"
 cp hermos_kmod/observation/*.[ch] "${verify_dir}/kmod/observation/"
+cp hermos_kmod/notification/*.[ch] "${verify_dir}/kmod/notification/"
 make -C "/lib/modules/$(uname -r)/build" M="${verify_dir}/kmod" CC="${CC:-gcc}" modules
 make -C "/lib/modules/$(uname -r)/build" M="${verify_dir}/kmod" \
   CC="${CC:-gcc}" HERMOS_MODULE_NAME=hermos_verify modules

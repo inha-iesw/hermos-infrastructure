@@ -379,6 +379,11 @@ struct ioctl_set_ros2_publisher_num_args
 #define HERMOS_REMOVE_BRIDGE_CMD _IOW(0xA6, 15, struct ioctl_remove_bridge_args)
 #define HERMOS_GET_PUBLISHER_NUM_CMD _IOWR(0xA6, 16, union ioctl_get_publisher_num_args)
 #define HERMOS_REMOVE_SUBSCRIBER_CMD _IOW(0xA6, 17, struct ioctl_remove_subscriber_args)
+/** Bind a callback subscriber once. Returns a CLOEXEC, nonblocking pollable fd.
+ * Read one uint64_t to acknowledge coalesced readiness, including an initial subscription check.
+ * Removing the subscriber disconnects all duplicates of the fd (POLLHUP and EOF).
+ */
+#define HERMOS_OPEN_SUBSCRIBER_NOTIFY_FD_CMD _IOW(0xA6, 35, struct ioctl_remove_subscriber_args)
 #define HERMOS_REMOVE_PUBLISHER_CMD _IOW(0xA6, 18, struct ioctl_remove_publisher_args)
 #define HERMOS_CHECK_AND_REQUEST_BRIDGE_SHUTDOWN_CMD \
   _IOR(0xA6, 19, struct ioctl_check_and_request_bridge_shutdown_args)

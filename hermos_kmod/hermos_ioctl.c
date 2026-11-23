@@ -2,6 +2,7 @@
 #include "hermos_internal.h"
 #include "observation/endpoint_stats.h"
 
+#include <linux/file.h>
 #include <linux/random.h>
 
 // Protected by global_htables_rwsem, like topic creation. The nonce separates module instances;
@@ -293,6 +294,7 @@ static int insert_subscriber_info(
   (*new_info)->dropped_history_total = 0;
   (*new_info)->need_mmap_update = true;
   (*new_info)->is_bridge = is_bridge;
+  (*new_info)->notify = NULL;
   INIT_HLIST_NODE(&(*new_info)->node);
   uint32_t hash_val = hash_min(new_id, SUB_INFO_HASH_BITS);
   hash_add(wrapper->topic->sub_info_htable, &(*new_info)->node, hash_val);
@@ -1036,6 +1038,10 @@ int hermos_ioctl_publish_msg(
     if (!hermos_domain_delivery_allowed(wrapper->topic, pub_info->domain_id, sub_info->domain_id))
       continue;
     if (sub_info->ignore_local_publications && (sub_info->pid == pub_info->pid)) {
+      continue;
+    }
+    if (sub_info->notify) {
+      hermos_signal_subscriber_notify(sub_info->notify);
       continue;
     }
     subscriber_ids_out[subscriber_num] = sub_info->id;
@@ -2121,8 +2127,7 @@ int hermos_ioctl_remove_subscriber(
   }
 
   hash_del(&sub_info->node);
-  kfree(sub_info->node_name);
-  kfree(sub_info);
+  hermos_free_subscriber_info(sub_info);
 
   if (!is_parameter_service_topic(topic_name)) {
     dev_info(
@@ -3222,6 +3227,48 @@ static long get_publisher_qos_cmd(struct ioctl_get_publisher_qos_args __user * a
   return ret;
 }
 
+struct file *hermos_bind_subscriber_notify(
+  const char *topic, const struct ipc_namespace *ipc_ns, pid_t pid, topic_local_id_t id)
+{
+  struct file *file;
+  struct topic_wrapper *wrapper;
+  down_write(&global_htables_rwsem);
+  int ret = find_endpoint_topic(topic, ipc_ns, pid, &wrapper);
+  if (ret) {
+    file = ERR_PTR(ret == -EINVAL ? -ENOENT : ret);
+  } else {
+    struct subscriber_info *sub = find_subscriber_info(wrapper, id);
+    if (!sub || sub->domain_id != wrapper->domain_id) file = ERR_PTR(-ENOENT);
+    else if (sub->pid != pid) file = ERR_PTR(-EPERM);
+    else if (sub->is_take_sub) file = ERR_PTR(-EOPNOTSUPP);
+    else if (sub->notify) file = ERR_PTR(-EALREADY);
+    else file = hermos_new_subscriber_notify_file(&sub->notify);
+  }
+  up_write(&global_htables_rwsem);
+  return file;
+}
+
+static long open_subscriber_notify_fd_cmd(struct ioctl_remove_subscriber_args __user *arg)
+{
+  struct ioctl_remove_subscriber_args args;
+  char topic[TOPIC_NAME_BUFFER_SIZE];
+  if (copy_from_user(&args, arg, sizeof(args))) return -EFAULT;
+  int ret = copy_name_from_user(topic, sizeof(topic), &args.topic_name);
+  if (ret) return ret == -EINVAL ? -ENAMETOOLONG : ret;
+
+  // Reserve first so an exhausted fd table leaves the subscription unbound for retry.
+  int fd = get_unused_fd_flags(O_CLOEXEC);
+  if (fd < 0) return fd;
+  struct file *file = hermos_bind_subscriber_notify(
+    topic, current->nsproxy->ipc_ns, current->tgid, args.subscriber_id);
+  if (IS_ERR(file)) {
+    put_unused_fd(fd);
+    return PTR_ERR(file);
+  }
+  fd_install(fd, file);
+  return fd;
+}
+
 static long remove_subscriber_cmd(struct ioctl_remove_subscriber_args __user * arg)
 {
   int ret = 0;
@@ -3488,6 +3535,8 @@ long hermos_ioctl(struct file * file, unsigned int cmd, unsigned long arg)
       return get_publisher_qos_cmd((struct ioctl_get_publisher_qos_args __user *)arg);
     case HERMOS_REMOVE_SUBSCRIBER_CMD:
       return remove_subscriber_cmd((struct ioctl_remove_subscriber_args __user *)arg);
+    case HERMOS_OPEN_SUBSCRIBER_NOTIFY_FD_CMD:
+      return open_subscriber_notify_fd_cmd((struct ioctl_remove_subscriber_args __user *)arg);
     case HERMOS_REMOVE_PUBLISHER_CMD:
       return remove_publisher_cmd((struct ioctl_remove_publisher_args __user *)arg);
     case HERMOS_ADD_BRIDGE_CMD:

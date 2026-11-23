@@ -6,6 +6,7 @@
 
 #include <kunit/test.h>
 #include <linux/delay.h>
+#include <linux/file.h>
 #include <linux/mm.h>
 #include <linux/string.h>
 
@@ -682,13 +683,23 @@ void test_case_do_exit_with_multi_references_subscriber_exit_first(struct kunit 
 // Test that subscription MQ info is captured on subscriber exit and returned via ioctl
 void test_case_do_exit_subscription_mq_info(struct kunit * test)
 {
-  // Arrange: one process with one subscriber
+  // Only the callback subscriber owns a legacy notification MQ.
   const pid_t subscriber_pid = PID_BASE;
   setup_one_process(test, subscriber_pid);
   char mq_topic_name[TOPIC_NAME_BUFFER_SIZE];
   topic_local_id_t sub_id =
     setup_one_subscriber_on_topic(test, subscriber_pid, TOPIC_NAME, mq_topic_name);
 
+  union ioctl_add_subscriber_args take;
+  KUNIT_ASSERT_EQ(test, hermos_ioctl_add_subscriber(
+    TOPIC_NAME, current->nsproxy->ipc_ns, NODE_NAME, subscriber_pid, QOS_DEPTH,
+    QOS_IS_TRANSIENT_LOCAL, QOS_IS_RELIABLE, true, IGNORE_LOCAL_PUBLICATIONS, IS_BRIDGE, &take), 0);
+
+  topic_local_id_t bound = setup_one_subscriber_on_topic(test, subscriber_pid, TOPIC_NAME, NULL);
+  struct file *file = hermos_bind_subscriber_notify(
+    TOPIC_NAME, current->nsproxy->ipc_ns, subscriber_pid, bound);
+  KUNIT_ASSERT_NOT_ERR_OR_NULL(test, file);
+  fput(file);  // Closing the fd leaves the bound subscriber alive until its owner exits.
 
   // Act: simulate process exit
   hermos_enqueue_exit_pid(subscriber_pid);
