@@ -70,6 +70,9 @@ ThreadConfiguratorNode::ThreadConfiguratorNode(const rclcpp::NodeOptions & optio
     id_to_non_ros_thread_config_[cfg.thread_str] = &cfg;
   }
 
+  // CallbackGroupInfo carries no authenticated process identity. DDS callers
+  // must remain trusted; the credential checks on the local datagram listener
+  // cannot authenticate this separate transport (see the package README).
   auto cbg_qos = rclcpp::QoS(rclcpp::KeepAll()).reliable().transient_local();
 
   non_ros_thread_listener_ =

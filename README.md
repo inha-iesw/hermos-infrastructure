@@ -52,6 +52,7 @@
 ## 목차
 
 - [지원 환경](#지원-환경)
+- [현재 신뢰 경계](#현재-신뢰-경계)
 - [사용자 안내](#사용자-안내)
 - [개발자 안내](#개발자-안내)
 - [디버깅](#디버깅)
@@ -69,6 +70,32 @@
 | Linux 커널 | 5.x / 6.x 계열 (세부 버전별 지원 표는 아직 없음) |
 
 ---
+
+## 현재 신뢰 경계
+
+상위 runtime은 참여 프로세스가 서로 신뢰하는 구성을 전제로 합니다. 현재 backend의
+검사 범위도 이 전제에서 읽어야 합니다. 아래 검사는 모든 로컬 사용자 사이의 보안
+격리나 메시지 기밀성을 보장하지 않습니다.
+
+| 경로 | 현재 강제하는 조건 | 남은 경계 |
+|---|---|---|
+| publish·receive·take·release·remove ioctl | endpoint 소유 프로세스와 등록 effective UID 검사 | 숫자 PID 재사용에 대한 세대 검사는 없음 |
+| endpoint·bridge 등록 | 현재 kmod는 IPC namespace마다 동시에 하나의 effective UID만 허용 | 같은 UID의 참여자와 daemon은 서로 신뢰 |
+| bridge manager abstract UDS | kernel이 전달한 peer UID를 listener의 effective UID와 대조하고 송신 PID의 IPC namespace를 확인 | 주소는 IPC namespace inode와 수치 ROS domain으로 구분하며 도달 범위는 network namespace |
+| configurator non-ROS UDS | kernel이 전달한 peer UID가 configurator의 effective UID와 같고 알린 tid가 송신 프로세스 소속 | 같은 UID의 참여자가 자기 스레드의 RT 정책을 요청할 수 있음 |
+| configurator DDS·재적용 | 설정 이름과 숫자 tid | 송신자·저장된 tid 소유자를 인증하지 않음 |
+| CPU 공유 힙·구독 알림 | SHM 0600 생성 후 0400, 구독자별 알림 fd, 호환 MQ는 0600 | 같은 UID의 프로세스가 신뢰 경계 안에 있음 |
+
+장치 파일 접근 권한은 참여 제한이며 위 채널 전체의 인증을 대신하지 않습니다.
+현재 빌드는 `hermos` 장치를 0666, `hermos_rclpy` 장치를 0660으로 만듭니다.
+구형 kmod와의 MQ 호환은 세대 token을 발급하는 빌드에서 지원하며 같은 UID 사용은
+배포 환경에서 보장해야 합니다. 구독자별 동작은 [알림 규약](docs/message_queue.md)을 참고하세요.
+private IPC/mount namespace만으로 abstract UDS까지 격리되지는 않으므로, 같은 network
+namespace의 프로세스도 신뢰 범위에 포함해야 합니다. 다른 사용자를 격리하는 배포에는
+별도의 통신 인증과 RT 권한 부여 정책이 필요합니다.
+자세한 configurator 제한은 [패키지 문서](src/hermos_cie_thread_configurator/README.md)를
+참고하세요. 이 설명은 현재 구현의 한계를 기록하며 미구현 인증을 보장하지 않습니다.
+
 
 ## 사용자 안내
 
