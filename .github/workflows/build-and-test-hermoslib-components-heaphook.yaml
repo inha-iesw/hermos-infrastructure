@@ -138,6 +138,12 @@ jobs:
         # Verify ament_package is now importable without PYTHONPATH
         python3 -c "import ament_package; print('ament_package found at:', ament_package.__file__)"
 
+    - name: Test repository scripts
+      if: github.event_name == 'push' || (steps.check_diff.outputs.cpp_changed == 'true' || steps.check_diff.outputs.heaphook_changed == 'true')
+      run: |
+        source /opt/ros/${{ env.ROS_DISTRO }}/setup.bash
+        python3 -m pytest -q scripts/test
+
     - name: Build src
       if: github.event_name == 'push' || (steps.check_diff.outputs.cpp_changed == 'true' || steps.check_diff.outputs.heaphook_changed == 'true')
       env:

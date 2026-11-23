@@ -48,5 +48,6 @@ colcon --log-base log/verify test --base-paths src \
   --executor sequential --event-handlers console_direct+ \
   --return-code-on-test-failure \
   --ctest-args -LE 'requires_kernel_module|requires_heaphook' --output-on-failure
+python3 -m pytest -q scripts/test
 python3 -m pytest -q src/ros2hermos/test
 python3 -m pytest -q src/ros2hermos_discovery_agent/test
