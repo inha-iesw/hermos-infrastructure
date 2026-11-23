@@ -79,6 +79,18 @@ topic_local_id_t initialize_publisher(
 
   // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay,hicpp-no-array-decay)
   out_mq_topic_name = pub_args.ret_mq_topic_name;
+  try {
+    detail::require_notification_token(out_mq_topic_name);
+  } catch (const std::system_error &) {
+    // The constructor has not acquired this id yet, so roll back registration here.
+    ioctl_remove_publisher_args args{};
+    args.topic_name = {topic_name.c_str(), topic_name.size()};
+    args.publisher_id = pub_args.ret_id;
+    if (ioctl(hermos_fd, HERMOS_REMOVE_PUBLISHER_CMD, &args) < 0) {
+      RCLCPP_WARN(logger, "Failed to remove incompatible publisher (id=%d).", args.publisher_id);
+    }
+    throw;
+  }
   return pub_args.ret_id;
 }
 

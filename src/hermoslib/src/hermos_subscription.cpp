@@ -1,6 +1,7 @@
 #include "hermos/bridge/hermos_bridge_node.hpp"
 #include "hermos/internal/type_registry_writer.hpp"
 #include "hermos/node/hermos_node.hpp"
+#include "ipc/access.hpp"
 #include "rclcpp/typesupport_helpers.hpp"
 #include "rclcpp/version.h"
 #include "rcpputils/shared_library.hpp"
@@ -8,18 +9,67 @@
 #include <rmw/rmw.h>
 #include <rmw/serialized_message.h>
 
+#include <system_error>
+
 namespace hermos
 {
 
+detail::SubscriberRegistration::~SubscriberRegistration()
+{
+  if (id < 0) {
+    return;
+  }
+  // Pool mappings can be shared by other subscriptions and remain process-owned.
+  ioctl_remove_subscriber_args args{};
+  args.topic_name = {topic_name.c_str(), topic_name.size()};
+  args.subscriber_id = id;
+  if (ioctl(hermos_fd, HERMOS_REMOVE_SUBSCRIBER_CMD, &args) < 0) {
+    RCLCPP_WARN(logger, "Failed to remove subscriber (id=%d) from kernel.", id);
+  }
+}
+
+int detail::SubscriptionNotification::open(
+  const std::string & topic_name, const std::string & mq_topic_name, topic_local_id_t id)
+{
+  ioctl_remove_subscriber_args args{};
+  args.topic_name = {topic_name.c_str(), topic_name.size()};
+  args.subscriber_id = id;
+  const int fd = ioctl(hermos_fd, HERMOS_OPEN_SUBSCRIBER_NOTIFY_FD_CMD, &args);
+  if (fd >= 0) {
+    mq.first = fd;
+    return fd;
+  }
+  // Older HERM0S drivers return EINVAL for an unknown command. A supported bind
+  // reports endpoint and resource errors separately so they can reach the caller.
+  if (errno != EINVAL && errno != ENOTTY) {
+    throw std::system_error(errno, std::generic_category(), "open subscriber notification fd");
+  }
+  detail::require_notification_token(mq_topic_name);
+  RCLCPP_WARN(logger, "Subscriber on '%s' uses generation-scoped MQ notifications because "
+    "the kernel module does not support notification fds.", topic_name.c_str());
+  return open_mq_for_subscription(mq_topic_name, id, mq);
+}
+
+detail::SubscriptionNotification::~SubscriptionNotification()
+{
+  if (is_driver_fd()) {
+    close(mq.first);
+  } else if (mq.first != -1) {
+    remove_mq(mq);
+  }
+}
+
 SubscriptionBase::SubscriptionBase(rclcpp::Node * node, const std::string & topic_name)
-: topic_name_(node->get_node_topics_interface()->resolve_topic_name(topic_name))
+: topic_name_(node->get_node_topics_interface()->resolve_topic_name(topic_name)),
+  registration_(std::make_shared<detail::SubscriberRegistration>(topic_name_))
 {
   validate_ld_preload();
 }
 
 SubscriptionBase::SubscriptionBase(
   hermos::Node * node, const std::string & topic_name)  // NOLINT(modernize-pass-by-value)
-: topic_name_(node->get_node_topics_interface()->resolve_topic_name(topic_name))
+: topic_name_(node->get_node_topics_interface()->resolve_topic_name(topic_name)),
+  registration_(std::make_shared<detail::SubscriberRegistration>(topic_name_))
 {
   validate_ld_preload();
 }
@@ -53,6 +103,7 @@ void SubscriptionBase::initialize(
   }
 
   id_ = add_subscriber_args.ret_id;
+  registration_->id = id_;
   // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay,hicpp-no-array-decay)
   mq_topic_name_ = add_subscriber_args.ret_mq_topic_name;
 

@@ -1,5 +1,12 @@
 # Model checking for CallbackIsolatedHermosExecutor
 
+This model predates executor ownership transfer and subscription lifetime changes.
+Its `need_epoll_update` flags describe the earlier one-time registration scheme;
+they do not model the current `attached_once` state, per-executor epoll ownership,
+unregistration detach, or retained-message lifetime. Results from this model do
+not verify those newer behaviors; the corresponding C++ regression tests cover
+them. Updating the model is a separate task.
+
 ## Model checking for SingleThreadedHermosExecutor
 
 The `CallbackIsolatedHermosExecutor` is regarded as a set of `SingleThreadedHermosExecutor`s. Therefore, we verify the `SingleThreadedHermosExecutor` in isolation as first step.

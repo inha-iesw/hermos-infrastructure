@@ -82,3 +82,17 @@ participating workload together when reclaiming these mappings; kernel-only
 reuse would invalidate userspace mappings. Individual pool reclamation requires
 a coordinated unmap-and-release protocol that is not currently implemented.
 
+### Retained messages after subscription destruction
+
+The current lifetime safety implementation keeps the kernel subscriber registered
+until the last retained message from that subscription is released. Destroying
+the C++ subscription stops its callback registration, but a retained
+`ipc_shared_ptr` (including a response or a Python lease) delays the final kernel
+REMOVE. During that interval the endpoint still contributes to subscription
+counts, observation output and bridge demand. Release retained messages when
+those counts must drop. Removing graph participation immediately while preserving
+message ownership requires a separate retire operation, which is not implemented.
+This retained-message lifetime is the supported contract for this change set.
+It differs from ROS 2 subscription destruction; an immediate graph retirement
+operation is outside the chosen scope. The subscription lifetime test verifies
+that callback registration ends immediately while REMOVE follows the final RELEASE.

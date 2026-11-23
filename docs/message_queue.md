@@ -1,34 +1,32 @@
-## What is message queue in Linux?
+# Subscriber notifications
 
-See official man page: <https://man7.org/linux/man-pages/man7/mq_overview.7.html>
+Each callback subscription registers one pollable descriptor with the Hermos
+executor. On the current driver, `HERMOS_OPEN_SUBSCRIBER_NOTIFY_FD_CMD` binds
+an anonymous fd to the subscription. It starts readable for the initial receive
+check. Publishing marks eligible subscribers ready inside the publish ioctl.
+The executor acknowledges readiness with a `uint64_t` read and calls
+`HERMOS_RECEIVE_MSG_CMD` to obtain the available message references. Multiple
+publications can share one wakeup. Removing the subscription disconnects the fd.
 
-## How message queue is used in Hermos?
+## POSIX MQ compatibility
 
-The message queue is used to notify to subscriber processes that a publisher has published a new topic message. It is done in the following way:
+A module without the notification-fd command returns `EINVAL` or `ENOTTY`.
+For this fallback, registration must return a slash-prefixed token containing
+the 32 hexadecimal digits of the module load nonce, `-`, and the 16 hexadecimal
+digits of the topic generation. The library reports MQ fallback at subscription
+creation. A module returning a logical ROS topic name is incompatible and
+registration fails with `EPROTONOSUPPORT`. Other fd-bind errors propagate.
+The `-` separator cannot occur in a valid ROS topic name. Use valid ROS names
+for both sides of a domain bridge rule, including aliases supplied in YAML.
+Several builds report version 2.3.5; check the deployed artifact identity.
 
-- When a subscriber process calls `create_subscription` for a topic `T`, it opens a new message queue as a receiver.
-- When a publisher process calls `publish` for `T`, it opens an existing message queue and sends a message to notify to the subscribers that a new topic message has been published.
-- When a subscriber process receives the notification, then it gets the topic content through `HERMOS_RECEIVE_MSG_CMD` ioctl and executes the corresponding callback.
+The fallback subscriber creates `/hermos@<nonce>-<generation>@<subscriber-id>`
+with `O_EXCL` and mode 0600. Domain bridge endpoints sharing one underlying
+topic use the same generation. Recreating an independent topic gives it a new
+generation. A publisher opens the corresponding owner-only queue and sends a
+zero-length notification. The single slot coalesces repeated notifications until
+the executor drains it and receives via ioctl. The current kernel module can
+serve fd subscribers and token-based MQ subscribers on the same topic.
 
-The definition of the message is an empty struct:
-
-```c
-struct MqMsgHermos {};
-```
-
-We deliberately send it as a zero-length message although the size of this struct cannot be zero according to the C++ specification. Upon receiving this message, the subscriber needs to use an ioctl call to query the kernel module to check if there is anything that should be received.
-
-### Naming rules and restrictions
-
-The message_queue is named using topic_local_id. As implied by its name, topic_local_id exists in a topic-local namespace and represents IDs that are incrementally assigned from 0 to publishers/subscribers. This was introduced to distinguish between different publishers/subscribers that exist within the same process and participate in the same topic, and we use it here as well.
-Suppose that `topic_local_id` is the topic_local_id of the subscriber who opens the message queue and `topic_name` is the topic name corresponding to the message queue.
-
-- The message queue name for the topic publish notification is `/hermos@topic_name@topic_local_id`.
-
-The restrictions of the naming are
-
-- The topic name must start with `/`,
-- and, it must not include `/` other than the beginning.
-
-The first rule is satisfied because all topic names start with `/`.
-To satisfy the second rule, all the occurrence of `/` in topic names are replaced for `_`.
+Take-only subscriptions receive on demand. CPU payloads and GPU descriptors
+continue to be accessed through their existing shared-memory lifetime contract.

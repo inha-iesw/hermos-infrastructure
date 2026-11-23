@@ -40,16 +40,16 @@ struct TimerInfo
 
   uint32_t timer_id = 0;
   int timer_fd = -1;
-  bool timer_fd_need_update = false;
   int clock_eventfd = -1;  // eventfd to wake epoll on clock updates (ROS_TIME only)
-  bool clock_eventfd_need_update = false;
+  bool clock_attached_once = false;
   std::weak_ptr<TimerBase> timer;
   rclcpp::CallbackGroup::SharedPtr callback_group;
   std::atomic<int64_t> last_call_time_ns;
   std::atomic<int64_t> next_call_time_ns;
   std::atomic<int64_t> time_credit{0};  // Credit for time elapsed before ROS time is activated
   std::atomic<int64_t> period_ns;
-  bool need_epoll_update = true;
+  int timer_registered_epoll_fd = -1;
+  int clock_registered_epoll_fd = -1;
 
   rclcpp::Clock::SharedPtr clock;
   rclcpp::JumpHandler::SharedPtr jump_handler;
@@ -81,6 +81,7 @@ bool group_has_hermos_timer(const rclcpp::CallbackGroup::SharedPtr & group);
 
 class TimerEventHandler : public EpollEventHandler
 {
+  int epoll_fd_ = -1;
   pid_t my_pid_;
   std::mutex * ready_hermos_executables_mutex_;
   std::vector<HermosExecutable> * ready_hermos_executables_;
@@ -95,6 +96,8 @@ public:
   {
   }
 
+  ~TimerEventHandler() override;
+
   [[nodiscard]] EpollEventType get_type() const override { return EpollEventType::Timer; }
 
   void prepare_epoll(int epoll_fd, const CallbackGroupValidator & validate_callback_group) override;
@@ -104,6 +107,7 @@ public:
 
 class ClockEventHandler : public EpollEventHandler
 {
+  int epoll_fd_ = -1;
   pid_t my_pid_;
   std::mutex * ready_hermos_executables_mutex_;
   std::vector<HermosExecutable> * ready_hermos_executables_;
@@ -117,6 +121,8 @@ public:
     ready_hermos_executables_(ready_hermos_executables)
   {
   }
+
+  ~ClockEventHandler() override;
 
   [[nodiscard]] EpollEventType get_type() const override { return EpollEventType::Clock; }
 

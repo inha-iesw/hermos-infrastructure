@@ -7,6 +7,7 @@
 #include "hermos/node/hermos_node.hpp"
 #include "hermos_signal_handler.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "rcpputils/scope_exit.hpp"
 
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
@@ -109,15 +110,16 @@ bool HermosOnlyExecutor::get_next_ready_hermos_executable(
 {
   std::lock_guard<std::mutex> ready_wait_lock{ready_hermos_executables_mutex_};
 
-  for (auto it = ready_hermos_executables_.begin(); it != ready_hermos_executables_.end();
-       ++it) {
+  for (auto it = ready_hermos_executables_.begin(); it != ready_hermos_executables_.end();) {
     if (!is_callback_group_associated(it->callback_group)) {
+      it = ready_hermos_executables_.erase(it);
       continue;
     }
 
     if (
       it->callback_group->type() == rclcpp::CallbackGroupType::MutuallyExclusive &&
       !it->callback_group->can_be_taken_from().exchange(false)) {
+      ++it;
       continue;
     }
 
@@ -133,11 +135,12 @@ bool HermosOnlyExecutor::get_next_ready_hermos_executable(
 // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 void HermosOnlyExecutor::execute_hermos_executable(HermosExecutable & hermos_executable)
 {
+  RCPPUTILS_SCOPE_EXIT({
+    if (hermos_executable.callback_group->type() == rclcpp::CallbackGroupType::MutuallyExclusive) {
+      hermos_executable.callback_group->can_be_taken_from().store(true);
+    }
+  });
   (*hermos_executable.callable)();
-
-  if (hermos_executable.callback_group->type() == rclcpp::CallbackGroupType::MutuallyExclusive) {
-    hermos_executable.callback_group->can_be_taken_from().store(true);
-  }
 }
 
 void HermosOnlyExecutor::cancel()

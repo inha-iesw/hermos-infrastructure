@@ -14,6 +14,19 @@ namespace hermos
 using CallbackGroupValidator = std::function<bool(const rclcpp::CallbackGroup::SharedPtr &)>;
 
 /**
+ * @brief Move a descriptor's exclusive epoll registration between executors.
+ * @param registered_epoll_fd Current owner; becomes -1 on detach and the new fd on attachment.
+ * @param epoll_fd New owner, or -1 to detach.
+ * @param fd Monitored descriptor; ownership remains with its subscription or timer.
+ * @param type Event type dispatched by the new owner.
+ * @param id Entity identifier dispatched by the new owner.
+ * @pre The caller holds the entity registry mutex.
+ * @throws std::runtime_error if detach or attach fails.
+ */
+void update_epoll_registration(
+  int & registered_epoll_fd, int epoll_fd, int fd, EpollEventType type, EpollEventLocalID id);
+
+/**
  * @brief Abstract base class implemented for each type of event (e.g., Timer, Subscription,
  * Shutdown events). Please refer to EpollEventType for details on event classification. Derived
  * classes inheriting from this class must implement the processing logic specific to each event.

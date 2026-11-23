@@ -255,7 +255,6 @@ void register_timer_info(
   timer_info->next_call_time_ns.store(now_ns + period.count(), std::memory_order_relaxed);
   timer_info->period_ns.store(period.count(), std::memory_order_relaxed);
   timer_info->callback_group = callback_group;
-  timer_info->need_epoll_update = true;
   timer_info->clock = clock;
 
   if (is_ros_time) {
@@ -280,14 +279,6 @@ void register_timer_info(
   set_timer_info(*timer, timer_info);
 
   setup_time_jump_callback(timer_info, clock);
-
-  if (timer_info->timer_fd >= 0) {
-    timer_info->timer_fd_need_update = true;
-  }
-
-  if (timer_info->clock_eventfd >= 0) {
-    timer_info->clock_eventfd_need_update = true;
-  }
 
   {
     std::lock_guard<std::mutex> lock(id2_timer_info_mtx);
@@ -371,40 +362,44 @@ void TimerInfo::set_period(std::chrono::nanoseconds new_period)
   set_timer_fd(timer_fd, timer_id, spec);
 }
 
+TimerEventHandler::~TimerEventHandler()
+{
+  std::lock_guard<std::mutex> lock(id2_timer_info_mtx);
+  for (auto & [id, info] : id2_timer_info) {
+    if (info->timer_registered_epoll_fd == epoll_fd_) {
+      info->timer_registered_epoll_fd = -1;
+    }
+  }
+}
+
 void TimerEventHandler::prepare_epoll(
   int epoll_fd, const CallbackGroupValidator & validate_callback_group)
 {
   std::lock_guard<std::mutex> lock(id2_timer_info_mtx);
+  epoll_fd_ = epoll_fd;
 
   for (auto & it : id2_timer_info) {
     const uint32_t timer_id = it.first;
     TimerInfo & timer_info = *it.second;
 
-    if (!timer_info.need_epoll_update) {
-      continue;
-    }
-
-    if (!timer_info.timer.lock() || !validate_callback_group(timer_info.callback_group)) {
-      continue;
-    }
-
     std::shared_lock fd_lock(timer_info.fd_mutex);
+    // Timer destruction re-enters the registry mutex; do not create a strong owner here.
+    if (timer_info.timer.expired() || !validate_callback_group(timer_info.callback_group)) {
+      if (timer_info.timer_registered_epoll_fd == epoll_fd) {
+        update_epoll_registration(
+          timer_info.timer_registered_epoll_fd, -1, timer_info.timer_fd,
+          EpollEventType::Timer, timer_id);
+      }
+      continue;
+    }
 
     // Register timerfd (wall clock based firing)
-    if (timer_info.timer_fd >= 0 && timer_info.timer_fd_need_update) {
-      struct epoll_event clock_ev = {};
-      clock_ev.events = EPOLLIN;
-      clock_ev.data.u64 = pack_epoll_data(EpollEventType::Timer, timer_id);
-      if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, timer_info.timer_fd, &clock_ev) == -1) {
-        RCLCPP_ERROR(logger, "epoll_ctl failed for timer: %s", strerror(errno));
-        close(hermos_fd);
-        exit(EXIT_FAILURE);
-      }
-      timer_info.timer_fd_need_update = false;
+    if (timer_info.timer_fd >= 0) {
+      update_epoll_registration(
+        timer_info.timer_registered_epoll_fd, epoll_fd, timer_info.timer_fd,
+        EpollEventType::Timer, timer_id);
     }
 
-    timer_info.need_epoll_update =
-      timer_info.timer_fd_need_update || timer_info.clock_eventfd_need_update;
   }
 }
 
@@ -419,10 +414,8 @@ void TimerEventHandler::handle(EpollEventLocalID event_local_id)
   {
     std::lock_guard<std::mutex> lock(id2_timer_info_mtx);
     const auto it = id2_timer_info.find(timer_id);
-    if (it == id2_timer_info.end()) {
-      RCLCPP_ERROR(logger, "Hermos internal implementation error: timer info cannot be found");
-      close(hermos_fd);
-      exit(EXIT_FAILURE);
+    if (it == id2_timer_info.end() || it->second->timer_registered_epoll_fd != epoll_fd_) {
+      return;
     }
     timer_info = it->second;
     timer_ptr = timer_info->timer.lock();
@@ -430,11 +423,9 @@ void TimerEventHandler::handle(EpollEventLocalID event_local_id)
       return;  // Timer object has been destroyed
     }
     callback_group = timer_info->callback_group;
-  }
 
-  // Read the number of expirations to clear the event
-  uint64_t expirations = 0;
-  {
+    // Read under the registry lock so transfer cannot change the draining owner.
+    uint64_t expirations = 0;
     std::shared_lock fd_lock(timer_info->fd_mutex);
     if (timer_info->timer_fd < 0) {
       return;  // Timer fd was closed (ROS time activated)
@@ -465,40 +456,56 @@ void TimerEventHandler::handle(EpollEventLocalID event_local_id)
   }
 }
 
+ClockEventHandler::~ClockEventHandler()
+{
+  std::lock_guard<std::mutex> lock(id2_timer_info_mtx);
+  for (auto & [id, info] : id2_timer_info) {
+    if (info->clock_registered_epoll_fd == epoll_fd_) {
+      info->clock_registered_epoll_fd = -1;
+    }
+  }
+}
+
 void ClockEventHandler::prepare_epoll(
   int epoll_fd, const CallbackGroupValidator & validate_callback_group)
 {
   std::lock_guard<std::mutex> lock(id2_timer_info_mtx);
+  epoll_fd_ = epoll_fd;
 
   for (auto & it : id2_timer_info) {
     const uint32_t timer_id = it.first;
     TimerInfo & timer_info = *it.second;
 
-    if (!timer_info.need_epoll_update) {
-      continue;
-    }
-
-    if (!timer_info.timer.lock() || !validate_callback_group(timer_info.callback_group)) {
-      continue;
-    }
-
     std::shared_lock fd_lock(timer_info.fd_mutex);
+    // Timer destruction re-enters the registry mutex; do not create a strong owner here.
+    if (timer_info.timer.expired() || !validate_callback_group(timer_info.callback_group)) {
+      if (timer_info.clock_registered_epoll_fd == epoll_fd) {
+        update_epoll_registration(
+          timer_info.clock_registered_epoll_fd, -1, timer_info.clock_eventfd,
+          EpollEventType::Clock, timer_id);
+      }
+      continue;
+    }
 
     // Register clock_eventfd for ROS_TIME timers (simulation time support)
-    if (timer_info.clock_eventfd >= 0 && timer_info.clock_eventfd_need_update) {
-      struct epoll_event ev = {};
-      ev.events = EPOLLIN;
-      ev.data.u64 = pack_epoll_data(EpollEventType::Clock, timer_id);
-      if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, timer_info.clock_eventfd, &ev) == -1) {
-        RCLCPP_ERROR(logger, "epoll_ctl failed for clock_eventfd: %s", strerror(errno));
-        close(hermos_fd);
-        exit(EXIT_FAILURE);
+    if (timer_info.clock_eventfd >= 0) {
+      const bool transferred = timer_info.clock_registered_epoll_fd != epoll_fd &&
+                               timer_info.clock_attached_once;
+      update_epoll_registration(
+        timer_info.clock_registered_epoll_fd, epoll_fd, timer_info.clock_eventfd,
+        EpollEventType::Clock, timer_id);
+      // The old executor may have consumed a clock edge into its ready queue.
+      // Recheck simulated-time readiness even if no later clock jump arrives.
+      if (transferred && timer_info.timer_fd < 0) {
+        const uint64_t value = 1;
+        if (write(timer_info.clock_eventfd, &value, sizeof(value)) == -1 && errno != EAGAIN) {
+          throw std::runtime_error(
+            std::string("clock transfer notification failed: ") + strerror(errno));
+        }
       }
-      timer_info.clock_eventfd_need_update = false;
+      timer_info.clock_attached_once = true;
     }
 
-    timer_info.need_epoll_update =
-      timer_info.timer_fd_need_update || timer_info.clock_eventfd_need_update;
   }
 }
 
@@ -513,10 +520,8 @@ void ClockEventHandler::handle(EpollEventLocalID event_local_id)
   {
     std::lock_guard<std::mutex> lock(id2_timer_info_mtx);
     const auto it = id2_timer_info.find(timer_id);
-    if (it == id2_timer_info.end()) {
-      RCLCPP_ERROR(logger, "Hermos internal implementation error: timer info cannot be found");
-      close(hermos_fd);
-      exit(EXIT_FAILURE);
+    if (it == id2_timer_info.end() || it->second->clock_registered_epoll_fd != epoll_fd_) {
+      return;
     }
     timer_info = it->second;
     timer_ptr = timer_info->timer.lock();
@@ -524,12 +529,12 @@ void ClockEventHandler::handle(EpollEventLocalID event_local_id)
       return;  // Timer object has been destroyed
     }
     callback_group = timer_info->callback_group;
-  }
 
-  uint64_t val = 0;
-  const ssize_t ret = read(timer_info->clock_eventfd, &val, sizeof(val));
-  if (ret == -1 || val == 0) {
-    return;
+    uint64_t val = 0;
+    const ssize_t ret = read(timer_info->clock_eventfd, &val, sizeof(val));
+    if (ret == -1 || val == 0) {
+      return;
+    }
   }
 
   // Check if timer is ready (corresponds to rcl_timer_is_ready)

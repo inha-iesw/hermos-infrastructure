@@ -36,8 +36,13 @@ void reset_capture_state()
 }
 }  // namespace
 
-extern "C" int ioctl(int, unsigned long, ...)
+extern "C" int ioctl(int, unsigned long request, ...)
 {
+  using namespace hermos;
+  if (request == HERMOS_OPEN_SUBSCRIBER_NOTIFY_FD_CMD) {
+    errno = EINVAL;  // Use this fixture's mocked notification MQ.
+    return -1;
+  }
   return 0;
 }
 
@@ -70,6 +75,7 @@ void SubscriptionBase::initialize(
   initialized_topic_names.push_back(topic_name_);
   initialized_qos_values.push_back(qos);
   id_ = 0;
+  mq_topic_name_ = "/0123456789abcdef0123456789abcdef-0000000000000001";
 }
 
 BridgeMode get_bridge_mode()

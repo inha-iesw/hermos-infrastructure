@@ -759,7 +759,7 @@ TEST_F(TestRegisterTimerInfo, populates_timer_info_from_arguments_and_clock)
   EXPECT_EQ(info->next_call_time_ns.load(std::memory_order_relaxed), now_ns + kPeriodNs);
 }
 
-TEST_F(TestRegisterTimerInfo, sets_epoll_update_flags_per_created_fds)
+TEST_F(TestRegisterTimerInfo, starts_with_unattached_descriptors)
 {
   // Arrange — STEADY_TIME so only timer_fd is created (no clock_eventfd).
   auto clock = std::make_shared<rclcpp::Clock>(RCL_STEADY_TIME);
@@ -773,9 +773,11 @@ TEST_F(TestRegisterTimerInfo, sets_epoll_update_flags_per_created_fds)
   // Assert
   auto info = find_registered(timer_id);
   ASSERT_NE(info, nullptr);
-  EXPECT_TRUE(info->need_epoll_update);
-  EXPECT_TRUE(info->timer_fd_need_update);
-  EXPECT_FALSE(info->clock_eventfd_need_update);
+  EXPECT_GE(info->timer_fd, 0);
+  EXPECT_EQ(info->clock_eventfd, -1);
+  EXPECT_EQ(info->timer_registered_epoll_fd, -1);
+  EXPECT_EQ(info->clock_registered_epoll_fd, -1);
+  EXPECT_FALSE(info->clock_attached_once);
 }
 
 TEST_F(TestRegisterTimerInfo, attaches_jump_handler_only_for_ros_time)

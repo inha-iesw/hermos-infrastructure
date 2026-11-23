@@ -58,14 +58,14 @@ struct SubscriptionOptions
  *   | Role            | kmod `is_bridge` | bridge request issued |
  *   |-----------------|------------------|-----------------------|
  *   | Default         | false            | yes (R2A)             |
- *   | HermosOnly    | false            | no                    |
+ *   | HermosOnly      | false            | no                    |
  *   | BridgeInternal  | true             | no                    |
  */
 enum class SubscriptionRole : uint8_t {
   /// User-created subscription; issues an R2A bridge request.
   Default,
-  /// Used internally by the service/client implementation; no bridge request.
-  /// Not intended for direct use by application code.
+  /// Native-only consumer, including explicit exporters and service/client internals.
+  /// Counted and visible as an ordinary subscription; issues no bridge request.
   HermosOnly,
   /// Used by the bridge implementation itself; marked as bridge in kmod and
   /// issues no bridge request.
@@ -79,6 +79,29 @@ mqd_t open_mq_for_subscription(
   std::pair<mqd_t, std::string> & mq_subscription);
 void remove_mq(const std::pair<mqd_t, std::string> & mq_subscription);
 uint32_t get_publisher_count_core(const std::string & topic_name);
+
+namespace detail
+{
+// Kept by received message control blocks so REMOVE cannot precede their RELEASE.
+struct SubscriberRegistration
+{
+  explicit SubscriberRegistration(std::string topic) : topic_name(std::move(topic)) {}
+  ~SubscriberRegistration();
+
+  const std::string topic_name;
+  topic_local_id_t id{-1};
+};
+
+// Subscriptions and in-flight handlers own the notification fd. Retained messages do not.
+struct SubscriptionNotification
+{
+  ~SubscriptionNotification();
+  int open(const std::string & topic_name, const std::string & mq_topic_name, topic_local_id_t id);
+  // The kernel notification fd is anonymous. A POSIX MQ always has a nonempty name.
+  bool is_driver_fd() const { return mq.first >= 0 && mq.second.empty(); }
+  std::pair<mqd_t, std::string> mq{-1, {}};
+};
+}  // namespace detail
 
 template <typename NodeT>
 rclcpp::CallbackGroup::SharedPtr get_valid_callback_group(
@@ -99,14 +122,21 @@ rclcpp::CallbackGroup::SharedPtr get_valid_callback_group(
   return callback_group;
 }
 
+/**
+ * @brief Own a native subscription registration through its outstanding received messages.
+ *
+ * Destroying a subscription stops callbacks and detaches its notification, but the
+ * kernel endpoint remains until all received ipc_shared_ptr handles are released.
+ * During that interval it still contributes to subscription counts, observation
+ * and bridge demand. See docs/shared_memory.md for this current lifetime limitation.
+ */
 class SubscriptionBase
 {
 protected:
   topic_local_id_t id_{-1};
   const std::string topic_name_;
-  // Topic name for the publish-notification MQ (returned by the kmod). Differs from topic_name_
-  // only for a domain-bridged/renamed topic, where it is the pair's canonical name so a publisher
-  // and a renamed subscriber derive the same MQ name.
+  std::shared_ptr<detail::SubscriberRegistration> registration_;
+  // Kernel-issued topic-generation token shared with publishers when MQ fallback is used.
   std::string mq_topic_name_;
   void initialize(
     const rclcpp::QoS & qos, const bool is_take_sub, const bool ignore_local_publications,
@@ -123,23 +153,7 @@ public:
 
   uint32_t get_publisher_count() const { return get_publisher_count_core(topic_name_); }
 
-  virtual ~SubscriptionBase()
-  {
-    if (id_ >= 0) {
-      // NOTE: Unmapping memory when a subscriber is destroyed is not implemented. Multiple
-      // subscribers
-      // may share the same mmap region, requiring reference counting in kmod. Since leaving the
-      // memory mapped should not cause any functional issues, this is left as future work.
-      struct ioctl_remove_subscriber_args remove_subscriber_args
-      {
-      };
-      remove_subscriber_args.topic_name = {topic_name_.c_str(), topic_name_.size()};
-      remove_subscriber_args.subscriber_id = id_;
-      if (ioctl(hermos_fd, HERMOS_REMOVE_SUBSCRIBER_CMD, &remove_subscriber_args) < 0) {
-        RCLCPP_WARN(logger, "Failed to remove subscriber (id=%d) from kernel.", id_);
-      }
-    }
-  }
+  virtual ~SubscriptionBase() = default;
 };
 
 /**
@@ -155,7 +169,7 @@ HERMOS_PUBLIC
 template <typename MessageT>
 class Subscription : public SubscriptionBase
 {
-  std::pair<mqd_t, std::string> mq_subscription_;
+  std::shared_ptr<detail::SubscriptionNotification> notification_;
   uint32_t callback_info_id_;
 
   // Returns rosidl message name for MessageT, or empty string if MessageT is not a rosidl message
@@ -180,12 +194,14 @@ class Subscription : public SubscriptionBase
 
     const rclcpp::QoS actual_qos = init_base(node, qos, type_name, false, options, role);
 
-    mqd_t mq = open_mq_for_subscription(mq_topic_name_, id_, mq_subscription_);
+    notification_ = std::make_shared<detail::SubscriptionNotification>();
+    const int fd = notification_->open(topic_name_, mq_topic_name_, id_);
 
     const bool is_transient_local =
       actual_qos.durability() == rclcpp::DurabilityPolicy::TransientLocal;
     callback_info_id_ = hermos::register_callback<MessageT>(
-      std::forward<Func>(callback), topic_name_, id_, is_transient_local, mq, callback_group);
+      std::forward<Func>(callback), topic_name_, id_, is_transient_local, fd, callback_group,
+      registration_, notification_);
 
     {
       uint64_t pid_callback_info_id = (static_cast<uint64_t>(getpid()) << 32) | callback_info_id_;
@@ -240,19 +256,8 @@ public:
     constructor_impl(node, type_name, qos, std::forward<Func>(callback), options, role);
   }
 
-  ~Subscription()
-  {
-    // Remove from callback info map to prevent stale references on re-subscription and to avoid
-    // fd reuse conflicts. When mq_close() is called in remove_mq(), the OS may later reuse the
-    // same fd number for a new subscription. If the old entry remains in id2_callback_info,
-    // adding the new fd to epoll (EPOLL_CTL_ADD) can fail with EEXIST because epoll still
-    // associates that fd number with the stale entry.
-    {
-      std::lock_guard<std::mutex> lock(id2_callback_info_mtx);
-      id2_callback_info.erase(callback_info_id_);
-    }
-    remove_mq(mq_subscription_);
-  }
+  ~Subscription() { unregister_callback(callback_info_id_); }
+
 };
 
 // NOTE on Subscription<void>:
@@ -399,7 +404,8 @@ public:
 
         MessageT * ptr = reinterpret_cast<MessageT *>(take_args.ret_addr);
         auto result =
-          hermos::ipc_shared_ptr<const MessageT>(ptr, topic_name_, id_, take_args.ret_entry_id);
+          hermos::ipc_shared_ptr<const MessageT>(
+            ptr, topic_name_, id_, take_args.ret_entry_id, registration_);
         old_ptr = std::move(last_taken_ptr_);
         last_taken_ptr_ = result;
         return result;
@@ -407,7 +413,8 @@ public:
     }
 
     MessageT * ptr = reinterpret_cast<MessageT *>(take_args.ret_addr);
-    return hermos::ipc_shared_ptr<const MessageT>(ptr, topic_name_, id_, take_args.ret_entry_id);
+    return hermos::ipc_shared_ptr<const MessageT>(
+      ptr, topic_name_, id_, take_args.ret_entry_id, registration_);
   }
 };
 

@@ -13,6 +13,29 @@
 namespace hermos
 {
 
+void update_epoll_registration(
+  int & registered_epoll_fd, int epoll_fd, int fd, EpollEventType type, EpollEventLocalID id)
+{
+  if (registered_epoll_fd == epoll_fd) {
+    return;
+  }
+  if (registered_epoll_fd >= 0 && fd >= 0 &&
+    epoll_ctl(registered_epoll_fd, EPOLL_CTL_DEL, fd, nullptr) == -1 && errno != ENOENT)
+  {
+    throw std::runtime_error(std::string("epoll detach failed: ") + strerror(errno));
+  }
+  registered_epoll_fd = -1;
+  if (epoll_fd >= 0 && fd >= 0) {
+    struct epoll_event event = {};
+    event.events = EPOLLIN;
+    event.data.u64 = pack_epoll_data(type, id);
+    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &event) == -1) {
+      throw std::runtime_error(std::string("epoll attach failed: ") + strerror(errno));
+    }
+    registered_epoll_fd = epoll_fd;
+  }
+}
+
 void DummyEventHandler::handle(EpollEventLocalID event_local_id)
 {
   RCLCPP_WARN(
@@ -43,6 +66,10 @@ EpollManager::EpollManager(EventHandlerArray sources)
 
 EpollManager::~EpollManager()
 {
+  // Clear registry ownership before close can recycle this epoll descriptor.
+  for (auto & source : sources_) {
+    source.reset();
+  }
   if (epoll_fd_ >= 0) {
     close(epoll_fd_);
   }

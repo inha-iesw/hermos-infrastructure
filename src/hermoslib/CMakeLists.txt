@@ -163,6 +163,7 @@ if(BUILD_TESTING)
     test/unit/test_mocked_hermos.cpp
     test/unit/test_publisher_borrow_exception.cpp
     test/unit/test_hermos_executors.cpp
+    test/unit/executor/test_executor_ownership.cpp
     test/unit/test_hermos_epoll_event.cpp
     test/unit/test_hermos_epoll_update.cpp
     test/unit/test_hermos_epoll_manager.cpp
@@ -192,6 +193,15 @@ if(BUILD_TESTING)
   ament_target_dependencies(test_unit_ipc_access_${PROJECT_NAME} rclcpp)
   set_tests_properties(test_unit_ipc_access_${PROJECT_NAME} PROPERTIES
     ENVIRONMENT "GTEST_DEATH_TEST_STYLE=fast")
+
+  # Subscription teardown must retain endpoint ownership through outstanding messages.
+  ament_add_gmock(test_unit_subscription_lifetime_${PROJECT_NAME}
+    test/unit/subscription/test_subscription_lifetime.cpp)
+  target_include_directories(test_unit_subscription_lifetime_${PROJECT_NAME} PRIVATE include src)
+  target_link_libraries(test_unit_subscription_lifetime_${PROJECT_NAME} hermos)
+  ament_target_dependencies(test_unit_subscription_lifetime_${PROJECT_NAME} rclcpp std_msgs)
+  set_tests_properties(test_unit_subscription_lifetime_${PROJECT_NAME} PROPERTIES
+    ENVIRONMENT "GTEST_DEATH_TEST_STYLE=threadsafe")
 
   ament_add_gmock(test_unit_publisher_borrow_allocation_failure_${PROJECT_NAME}
     test/unit/test_publisher_borrow_allocation_failure.cpp)

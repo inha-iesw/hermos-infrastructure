@@ -25,9 +25,13 @@ struct HermosExecutable
 HERMOS_PUBLIC
 class HermosExecutor : public rclcpp::Executor
 {
+  friend struct ExecutorOwnershipTestAccess;
   std::mutex ready_hermos_executables_mutex_;
   std::vector<HermosExecutable> ready_hermos_executables_;
+  std::mutex prepare_epoll_mutex_;
+  std::atomic<uint64_t> ownership_generation_{0};
 
+  std::vector<rclcpp::CallbackGroup::WeakPtr> get_owned_callback_groups();
   bool get_next_ready_hermos_executable(HermosExecutable & hermos_executable);
 
   // Return false iff this Executor is SingleThreadedHermosExecutor
@@ -53,6 +57,37 @@ public:
   explicit HermosExecutor(const rclcpp::ExecutorOptions & options = rclcpp::ExecutorOptions());
 
   virtual ~HermosExecutor();
+
+  using rclcpp::Executor::add_node;
+  using rclcpp::Executor::remove_node;
+
+  /**
+   * @brief Associate a group and request attachment of its Hermos descriptors.
+   * @copydetails rclcpp::Executor::add_callback_group
+   */
+  void add_callback_group(
+    rclcpp::CallbackGroup::SharedPtr group,
+    rclcpp::node_interfaces::NodeBaseInterface::SharedPtr node, bool notify = true) override;
+
+  /**
+   * @brief Remove a group and request detachment of its Hermos descriptors.
+   * @copydetails rclcpp::Executor::remove_callback_group
+   */
+  void remove_callback_group(rclcpp::CallbackGroup::SharedPtr group, bool notify = true) override;
+
+  /**
+   * @brief Associate a node and request attachment of its Hermos descriptors.
+   * @copydetails rclcpp::Executor::add_node
+   */
+  void add_node(
+    rclcpp::node_interfaces::NodeBaseInterface::SharedPtr node, bool notify = true) override;
+
+  /**
+   * @brief Remove a node and request detachment of its Hermos descriptors.
+   * @copydetails rclcpp::Executor::remove_node
+   */
+  void remove_node(
+    rclcpp::node_interfaces::NodeBaseInterface::SharedPtr node, bool notify = true) override;
 
   /// Block the calling thread and process callbacks in a loop until rclcpp::shutdown() is called or
   /// the executor is cancelled.

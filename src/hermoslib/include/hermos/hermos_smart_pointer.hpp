@@ -49,6 +49,8 @@ class TypeErasedPublisher;
 namespace detail
 {
 
+struct SubscriberRegistration;
+
 // Defined outside ipc_shared_ptr<T> because converting constructors (e.g., ipc_shared_ptr<T> to
 // ipc_shared_ptr<const T>) need to share control_block pointers. If control_block were nested
 // inside the template, each instantiation would create a distinct type (ipc_shared_ptr<T>::
@@ -57,13 +59,17 @@ namespace detail
 struct control_block
 {
   std::string topic_name;               // 8-byte alignment
+  std::shared_ptr<SubscriberRegistration> subscriber_registration;
   int64_t entry_id;                     // 8-byte alignment
   std::atomic<uint32_t> ref_count{1U};  // 4-byte alignment
   topic_local_id_t pubsub_id;           // 4-byte alignment
   std::atomic<bool> valid{true};        // 1-byte alignment
 
-  control_block(std::string topic, topic_local_id_t pubsub, int64_t entry)
-  : topic_name(std::move(topic)), entry_id(entry), pubsub_id(pubsub)
+  control_block(
+    std::string topic, topic_local_id_t pubsub, int64_t entry,
+    std::shared_ptr<SubscriberRegistration> registration = {})
+  : topic_name(std::move(topic)), subscriber_registration(std::move(registration)),
+    entry_id(entry), pubsub_id(pubsub)
   {
   }
 
@@ -160,14 +166,25 @@ public:
   HERMOS_PUBLIC
   ipc_shared_ptr() = default;
 
-  // Subscriber-side constructor (entry_id already assigned).
-  // Creates control block for reference counting.
-  // Note: Unlike the publisher-side constructor, this does NOT delete ptr on destruction.
-  // Instead, it notifies the kernel via release_subscriber_reference().
+  /**
+   * @brief Adopt a received kernel reference without taking ownership of the message storage.
+   *
+   * When registration is supplied, retaining this handle also retains the kernel
+   * endpoint after its Subscription is destroyed. Counts, observation and bridge
+   * demand can therefore persist until the last received handle is released;
+   * see docs/shared_memory.md. The payload remains readable for the handle's lifetime.
+   * @param ptr Received message address; nullptr creates an empty handle.
+   * @param topic_name Resolved topic name.
+   * @param pubsub_id Subscriber owning the reference.
+   * @param entry_id Received message entry.
+   * @param registration Optional endpoint owner, retained until after the final reference release.
+   */
   explicit ipc_shared_ptr(
     T * ptr, const std::string & topic_name, const topic_local_id_t pubsub_id,
-    const int64_t entry_id)
-  : ptr_(ptr), control_(ptr ? new detail::control_block(topic_name, pubsub_id, entry_id) : nullptr)
+    const int64_t entry_id, std::shared_ptr<detail::SubscriberRegistration> registration = {})
+  : ptr_(ptr),
+    control_(ptr ? new detail::control_block(
+                     topic_name, pubsub_id, entry_id, std::move(registration)) : nullptr)
   {
   }
 
