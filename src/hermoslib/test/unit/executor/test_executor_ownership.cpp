@@ -6,6 +6,7 @@
 #include "node/hermos_signal_handler.hpp"
 
 #include <gtest/gtest.h>
+#include <rclcpp/version.h>
 
 #include <chrono>
 #include <future>
@@ -34,6 +35,18 @@ struct ExecutorOwnershipTestAccess
 namespace
 {
 using namespace std::chrono_literals;
+
+rclcpp::CallbackGroup::SharedPtr make_standalone_callback_group()
+{
+  // Jazzy requires a context argument; these handler tests need no ROS node.
+#if RCLCPP_VERSION_MAJOR >= 28
+  return std::make_shared<rclcpp::CallbackGroup>(
+    rclcpp::CallbackGroupType::MutuallyExclusive, rclcpp::Context::WeakPtr{});
+#else
+  return std::make_shared<rclcpp::CallbackGroup>(
+    rclcpp::CallbackGroupType::MutuallyExclusive);
+#endif
+}
 
 template <typename Base>
 class TestExecutor : public Base
@@ -127,8 +140,7 @@ template <typename Handler>
 void release_last_timer_owner_during_prepare()
 {
   alarm(3);  // A regression must fail this child, never hang the test process.
-  auto group = std::make_shared<rclcpp::CallbackGroup>(
-    rclcpp::CallbackGroupType::MutuallyExclusive);
+  auto group = make_standalone_callback_group();
   auto clock = std::make_shared<rclcpp::Clock>(RCL_STEADY_TIME);
   const auto id = hermos::next_timer_id.fetch_add(1);
   auto timer = std::make_shared<hermos::GenericTimer<std::function<void()>>>(
@@ -381,8 +393,7 @@ TYPED_TEST(ExecutorOwnership, UnregisterDetachesRetainedNotificationFromEpoll)
 
 TEST(SubscriptionOwnership, StaleHandlerCannotConsumeNewOwnersNotification)
 {
-  auto group = std::make_shared<rclcpp::CallbackGroup>(
-    rclcpp::CallbackGroupType::MutuallyExclusive);
+  auto group = make_standalone_callback_group();
   SubscriptionNotification notification(group, "_stale_handle");
   const int old_epoll = epoll_create1(EPOLL_CLOEXEC);
   const int new_epoll = epoll_create1(EPOLL_CLOEXEC);
