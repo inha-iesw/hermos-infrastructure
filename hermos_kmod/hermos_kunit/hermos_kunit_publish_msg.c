@@ -106,7 +106,7 @@ void test_case_publish_msg_no_topic(struct kunit * test)
   // Act
   int ret = hermos_ioctl_publish_msg(
     topic_name, current->nsproxy->ipc_ns, publisher_id, msg_virtual_address, subscriber_ids_buf,
-    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_ret);
+    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_ret, publisher_pid);
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret, -EINVAL);
@@ -127,7 +127,7 @@ void test_case_publish_msg_no_publisher(struct kunit * test)
   // Act
   int ret = hermos_ioctl_publish_msg(
     topic_name, current->nsproxy->ipc_ns, publisher_id, msg_virtual_address, subscriber_ids_buf,
-    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret);
+    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret, publisher_pid);
 
   // Assert
   KUNIT_ASSERT_EQ(test, ret, -EINVAL);
@@ -145,7 +145,7 @@ void test_case_publish_msg_simple_publish_without_any_release(struct kunit * tes
   // Act
   int ret = hermos_ioctl_publish_msg(
     topic_name, current->nsproxy->ipc_ns, publisher_id, ret_addr, subscriber_ids_buf,
-    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret);
+    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret, publisher_pid);
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret, 0);
@@ -167,12 +167,13 @@ void test_case_publish_msg_different_publisher_no_release(struct kunit * test)
   topic_local_id_t publisher_id1, publisher_id2;
   uint64_t ret_addr1, ret_addr2;
   setup_one_publisher(test, &publisher_id1, &ret_addr1);
+  const pid_t publisher_pid1 = publisher_pid;
   setup_one_publisher(test, &publisher_id2, &ret_addr2);
 
   union ioctl_publish_msg_args ioctl_publish_msg_ret1;
   int ret1 = hermos_ioctl_publish_msg(
     topic_name, current->nsproxy->ipc_ns, publisher_id1, ret_addr1, subscriber_ids_buf,
-    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret1);
+    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret1, publisher_pid1);
   KUNIT_ASSERT_EQ(test, ret1, 0);
 
   union ioctl_publish_msg_args ioctl_publish_msg_ret2;
@@ -180,7 +181,7 @@ void test_case_publish_msg_different_publisher_no_release(struct kunit * test)
   // Act
   int ret2 = hermos_ioctl_publish_msg(
     topic_name, current->nsproxy->ipc_ns, publisher_id2, ret_addr2, subscriber_ids_buf,
-    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret2);
+    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret2, publisher_pid);
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret2, 0);
@@ -213,7 +214,7 @@ void test_case_publish_msg_referenced_node_not_released(struct kunit * test)
   union ioctl_publish_msg_args ioctl_publish_msg_ret1;
   int ret1 = hermos_ioctl_publish_msg(
     topic_name, current->nsproxy->ipc_ns, publisher_id, ret_addr, subscriber_ids_buf,
-    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret1);
+    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret1, publisher_pid);
   KUNIT_ASSERT_EQ(test, ret1, 0);
 
   // Subscriber takes a reference to entry1
@@ -226,7 +227,7 @@ void test_case_publish_msg_referenced_node_not_released(struct kunit * test)
   // Act
   int ret2 = hermos_ioctl_publish_msg(
     topic_name, current->nsproxy->ipc_ns, publisher_id, ret_addr + 1, subscriber_ids_buf,
-    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret2);
+    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret2, publisher_pid);
 
   // Assert: entry1 is not released because subscriber holds a reference
   KUNIT_EXPECT_EQ(test, ret2, 0);
@@ -256,7 +257,7 @@ void test_case_publish_msg_single_release_return(struct kunit * test)
   union ioctl_publish_msg_args ioctl_publish_msg_ret1;
   int ret1 = hermos_ioctl_publish_msg(
     topic_name, current->nsproxy->ipc_ns, publisher_id, ret_addr, subscriber_ids_buf,
-    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret1);
+    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret1, publisher_pid);
   KUNIT_ASSERT_EQ(test, ret1, 0);
 
   union ioctl_publish_msg_args ioctl_publish_msg_ret2;
@@ -264,7 +265,7 @@ void test_case_publish_msg_single_release_return(struct kunit * test)
   // Act: entry1 should be released to meet qos_depth=1
   int ret2 = hermos_ioctl_publish_msg(
     topic_name, current->nsproxy->ipc_ns, publisher_id, ret_addr + 1, subscriber_ids_buf,
-    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret2);
+    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret2, publisher_pid);
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret2, 0);
@@ -302,7 +303,7 @@ void test_case_publish_msg_excessive_release_count(struct kunit * test)
     union ioctl_publish_msg_args ioctl_publish_msg_ret;
     int ret = hermos_ioctl_publish_msg(
       topic_name, current->nsproxy->ipc_ns, publisher_id, ret_addr + i, subscriber_ids_buf,
-      ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret);
+      ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret, publisher_pid);
     entry_ids[i] = ioctl_publish_msg_ret.ret_entry_id;
     KUNIT_ASSERT_EQ(test, ret, 0);
 
@@ -315,7 +316,7 @@ void test_case_publish_msg_excessive_release_count(struct kunit * test)
   // Release all subscriber references so entries become eligible for GC
   for (int i = 0; i < MAX_RELEASE_NUM + 1; i++) {
     int ret = hermos_ioctl_release_message_entry_reference(
-      topic_name, current->nsproxy->ipc_ns, subscriber_id, entry_ids[i]);
+      topic_name, current->nsproxy->ipc_ns, subscriber_id, entry_ids[i], subscriber_pid);
     KUNIT_ASSERT_EQ(test, ret, 0);
   }
 
@@ -324,7 +325,7 @@ void test_case_publish_msg_excessive_release_count(struct kunit * test)
   // Act: Publish one more message; GC should release up to MAX_RELEASE_NUM entries
   int ret = hermos_ioctl_publish_msg(
     topic_name, current->nsproxy->ipc_ns, publisher_id, ret_addr, subscriber_ids_buf,
-    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret);
+    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret, publisher_pid);
 
   // Assert: GC is limited to MAX_RELEASE_NUM entries per publish call
   KUNIT_EXPECT_EQ(test, ret, 0);
@@ -347,7 +348,7 @@ void test_case_publish_msg_ret_one_subscriber(struct kunit * test)
   // Act
   int ret = hermos_ioctl_publish_msg(
     topic_name, current->nsproxy->ipc_ns, publisher_id, ret_addr, subscriber_ids_buf,
-    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret);
+    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret, publisher_pid);
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret, 0);
@@ -376,7 +377,7 @@ void test_case_publish_msg_ret_many_subscribers(struct kunit * test)
   // Act
   int ret = hermos_ioctl_publish_msg(
     topic_name, current->nsproxy->ipc_ns, publisher_id, ret_addr, subscriber_ids_buf,
-    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret);
+    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret, publisher_pid);
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret, 0);
@@ -397,7 +398,7 @@ void test_case_publish_msg_buffer_smaller_than_subscriber_count(struct kunit * t
   // Act: pass a buffer smaller than MAX_SUBSCRIBER_NUM
   int ret = hermos_ioctl_publish_msg(
     topic_name, current->nsproxy->ipc_ns, publisher_id, ret_addr, small_buf, ARRAY_SIZE(small_buf),
-    &ioctl_publish_msg_ret);
+    &ioctl_publish_msg_ret, publisher_pid);
 
   // Assert: ioctl_publish_msg rejects buffers that are not MAX_SUBSCRIBER_NUM
   KUNIT_EXPECT_EQ(test, ret, -EINVAL);
@@ -419,7 +420,7 @@ void test_case_ignore_local_same_pid_enabled(struct kunit * test)
   // Act
   int ret = hermos_ioctl_publish_msg(
     topic_name, current->nsproxy->ipc_ns, publisher_id, ret_addr, subscriber_ids_buf,
-    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret);
+    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret, common_pid);
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret, 0);
@@ -442,7 +443,7 @@ void test_case_ignore_local_same_pid_disabled(struct kunit * test)
   // Act
   int ret = hermos_ioctl_publish_msg(
     topic_name, current->nsproxy->ipc_ns, publisher_id, ret_addr, subscriber_ids_buf,
-    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret);
+    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret, common_pid);
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret, 0);
@@ -466,7 +467,7 @@ void test_case_ignore_local_diff_pid_enabled(struct kunit * test)
   // Act
   int ret = hermos_ioctl_publish_msg(
     topic_name, current->nsproxy->ipc_ns, publisher_id, ret_addr, subscriber_ids_buf,
-    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret);
+    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret, publisher_pid);
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret, 0);
@@ -490,10 +491,27 @@ void test_case_ignore_local_diff_pid_disabled(struct kunit * test)
   // Act
   int ret = hermos_ioctl_publish_msg(
     topic_name, current->nsproxy->ipc_ns, publisher_id, ret_addr, subscriber_ids_buf,
-    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret);
+    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret, publisher_pid);
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret, 0);
   KUNIT_EXPECT_EQ(test, ioctl_publish_msg_ret.ret_subscriber_num, 1);
   KUNIT_EXPECT_EQ(test, subscriber_ids_buf[0], subscriber_id);
+}
+
+void test_case_publish_msg_wrong_owner(struct kunit * test)
+{
+  topic_local_id_t publisher_id;
+  uint64_t addr;
+  setup_one_publisher(test, &publisher_id, &addr);
+  // A registered peer in the same domain still cannot publish as this owner.
+  pid_t other_pid = publisher_pid + 10000;
+  union ioctl_add_process_args other_process = {};
+  KUNIT_ASSERT_EQ(test, hermos_ioctl_add_process(
+    other_pid, current->nsproxy->ipc_ns, false, 0, &other_process), 0);
+  union ioctl_publish_msg_args result = {};
+  KUNIT_EXPECT_EQ(test, hermos_ioctl_publish_msg(
+    topic_name, current->nsproxy->ipc_ns, publisher_id, addr, subscriber_ids_buf,
+    ARRAY_SIZE(subscriber_ids_buf), &result, other_pid), -EPERM);
+  KUNIT_EXPECT_EQ(test, hermos_get_topic_entries_num(topic_name, current->nsproxy->ipc_ns), 0);
 }

@@ -164,7 +164,7 @@ void test_case_domain_bridge_cross_domain_enumeration(struct kunit * test)
   union ioctl_publish_msg_args publish_args;
   int ret = hermos_ioctl_publish_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, pub_id, msg_addr, subscriber_ids_buf,
-    ARRAY_SIZE(subscriber_ids_buf), &publish_args);
+    ARRAY_SIZE(subscriber_ids_buf), &publish_args, current->tgid);
   KUNIT_ASSERT_EQ(test, ret, 0);
 
   // The domain-2 subscriber receives the domain-1 publication (rule 1 -> 2).
@@ -188,7 +188,7 @@ void test_case_domain_bridge_direction_respected(struct kunit * test)
   union ioctl_publish_msg_args publish_args;
   int ret = hermos_ioctl_publish_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, pub_id, msg_addr, subscriber_ids_buf,
-    ARRAY_SIZE(subscriber_ids_buf), &publish_args);
+    ARRAY_SIZE(subscriber_ids_buf), &publish_args, current->tgid);
   KUNIT_ASSERT_EQ(test, ret, 0);
 
   // The domain-1 subscriber must not receive a domain-2 publication (no 2 -> 1).
@@ -212,7 +212,8 @@ void test_case_domain_bridge_partial_remove_keeps_struct(struct kunit * test)
   // Dropping domain 1's last endpoint drops its wrapper, but the shared struct
   // must survive for domain 2 (refcnt 2 -> 1); freeing it here would be a UAF.
   KUNIT_ASSERT_EQ(
-    test, hermos_ioctl_remove_publisher(TOPIC_NAME, current->nsproxy->ipc_ns, pub_id), 0);
+    test,
+    hermos_ioctl_remove_publisher(TOPIC_NAME, current->nsproxy->ipc_ns, pub_id, current->tgid), 0);
   KUNIT_EXPECT_EQ(test, hermos_topic_wrapper_refcnt(TOPIC_NAME, current->nsproxy->ipc_ns, 1), 0);
   KUNIT_EXPECT_EQ(test, hermos_topic_wrapper_refcnt(TOPIC_NAME, current->nsproxy->ipc_ns, 2), 1);
 }
@@ -232,7 +233,8 @@ void test_case_domain_bridge_partial_remove_sub_keeps_struct(struct kunit * test
   KUNIT_ASSERT_EQ(test, hermos_topic_wrapper_refcnt(TOPIC_NAME, current->nsproxy->ipc_ns, 1), 2);
 
   KUNIT_ASSERT_EQ(
-    test, hermos_ioctl_remove_subscriber(TOPIC_NAME, current->nsproxy->ipc_ns, sub_id), 0);
+    test,
+    hermos_ioctl_remove_subscriber(TOPIC_NAME, current->nsproxy->ipc_ns, sub_id, current->tgid), 0);
   KUNIT_EXPECT_EQ(test, hermos_topic_wrapper_refcnt(TOPIC_NAME, current->nsproxy->ipc_ns, 1), 0);
   KUNIT_EXPECT_EQ(test, hermos_topic_wrapper_refcnt(TOPIC_NAME, current->nsproxy->ipc_ns, 2), 1);
 }
@@ -330,7 +332,7 @@ void test_case_domain_bridge_shm_info_skips_undelivered_publisher(struct kunit *
     test,
     hermos_ioctl_receive_msg(
       TOPIC_NAME, current->nsproxy->ipc_ns, sub_id, pub_shm_infos, KUNIT_PUB_SHM_BUF_SIZE,
-      &receive_args),
+      &receive_args, current->tgid),
     0);
 
   KUNIT_EXPECT_EQ(test, receive_args.ret_pub_shm_num, (uint32_t)1);
@@ -371,7 +373,7 @@ void test_case_domain_bridge_rename_cross_domain_delivery(struct kunit * test)
     test,
     hermos_ioctl_publish_msg(
       RN_SRC, current->nsproxy->ipc_ns, pub_id, msg_addr, subscriber_ids_buf,
-      ARRAY_SIZE(subscriber_ids_buf), &publish_args),
+      ARRAY_SIZE(subscriber_ids_buf), &publish_args, current->tgid),
     0);
 
   KUNIT_EXPECT_EQ(test, publish_args.ret_subscriber_num, (uint32_t)1);
@@ -414,7 +416,7 @@ void test_case_domain_bridge_rename_multi_publisher(struct kunit * test)
     test,
     hermos_ioctl_publish_msg(
       RN_SRC, current->nsproxy->ipc_ns, pub_id, msg_addr, subscriber_ids_buf,
-      ARRAY_SIZE(subscriber_ids_buf), &publish_args),
+      ARRAY_SIZE(subscriber_ids_buf), &publish_args, current->tgid),
     0);
 
   // Delivered exactly once to the domain-2 subscriber, regardless of the other publishers.

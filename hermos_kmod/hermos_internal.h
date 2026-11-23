@@ -4,6 +4,7 @@
 #include "hermos.h"
 #include "hermos_memory_allocator.h"
 
+#include <linux/cred.h>
 #include <linux/device.h>
 #include <linux/fs.h>
 #include <linux/hashtable.h>
@@ -61,6 +62,7 @@ struct exit_subscription_entry
 
 struct process_info
 {
+  kuid_t euid;
   bool exited;
   // Tracks whether this process is the alive Bridge Manager for the IPC namespace.
   // The name is kept as "is_performance_bridge_manager" for ABI compatibility with existing
@@ -84,6 +86,7 @@ extern DECLARE_HASHTABLE(proc_info_htable, PROC_INFO_HASH_BITS);
 
 struct unlink_daemon_info
 {
+  kuid_t euid;
   pid_t global_pid;
   struct pid * pid_ref;
   const struct ipc_namespace * ipc_ns;
@@ -227,6 +230,7 @@ extern DECLARE_HASHTABLE(domain_rule_htable, TOPIC_HASH_BITS);
 // agent exits, so "registered" always means "alive".
 struct discovery_agent_info
 {
+  kuid_t euid;
   pid_t pid;
   const struct ipc_namespace * ipc_ns;
   uint32_t domain_id;

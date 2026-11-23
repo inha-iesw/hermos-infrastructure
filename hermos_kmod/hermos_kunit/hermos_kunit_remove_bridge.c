@@ -9,9 +9,17 @@ static const char * TOPIC_NAME = "/kunit_test_bridge_remove_topic";
 static const pid_t BRIDGE_OWNER_PID = 1000;
 static const pid_t OTHER_PID = 1001;
 
+static void setup_process(struct kunit * test)
+{
+  union ioctl_add_process_args process = {};
+  KUNIT_ASSERT_EQ(test, hermos_ioctl_add_process(
+    BRIDGE_OWNER_PID, current->nsproxy->ipc_ns, false, 0, &process), 0);
+}
+
 void test_case_remove_bridge_normal(struct kunit * test)
 {
   // Arrange
+  setup_process(test);
   struct ioctl_add_bridge_args args = {0};
   int ret_setup =
     hermos_ioctl_add_bridge(TOPIC_NAME, BRIDGE_OWNER_PID, true, current->nsproxy->ipc_ns, &args);
@@ -29,9 +37,12 @@ void test_case_remove_bridge_normal(struct kunit * test)
 void test_case_remove_bridge_partial(struct kunit * test)
 {
   // Arrange
+  setup_process(test);
   struct ioctl_add_bridge_args args = {0};
-  hermos_ioctl_add_bridge(TOPIC_NAME, BRIDGE_OWNER_PID, true, current->nsproxy->ipc_ns, &args);
-  hermos_ioctl_add_bridge(TOPIC_NAME, BRIDGE_OWNER_PID, false, current->nsproxy->ipc_ns, &args);
+  KUNIT_ASSERT_EQ(test, hermos_ioctl_add_bridge(
+    TOPIC_NAME, BRIDGE_OWNER_PID, true, current->nsproxy->ipc_ns, &args), 0);
+  KUNIT_ASSERT_EQ(test, hermos_ioctl_add_bridge(
+    TOPIC_NAME, BRIDGE_OWNER_PID, false, current->nsproxy->ipc_ns, &args), 0);
 
   // Act
   int ret1 =
@@ -66,6 +77,7 @@ void test_case_remove_bridge_not_found(struct kunit * test)
 void test_case_remove_bridge_pid_mismatch(struct kunit * test)
 {
   // Arrange
+  setup_process(test);
   struct ioctl_add_bridge_args args = {0};
   int ret_setup =
     hermos_ioctl_add_bridge(TOPIC_NAME, BRIDGE_OWNER_PID, true, current->nsproxy->ipc_ns, &args);

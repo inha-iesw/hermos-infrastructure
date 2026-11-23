@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0-only OR BSD-2-Clause
 #include "hermos_kunit_add_process.h"
 
-#include "../hermos.h"
+#include "../hermos_internal.h"
 #include "../hermos_memory_allocator.h"
 
 #include <kunit/test.h>
+#include <linux/cred.h>
 #include <linux/delay.h>
 #include <linux/sched/signal.h>
 
@@ -21,6 +22,49 @@ void test_case_add_process_normal(struct kunit * test)
   KUNIT_EXPECT_FALSE(test, args.ret_unlink_daemon_exist);
   KUNIT_EXPECT_EQ(test, hermos_get_alive_proc_num(), 1);
   KUNIT_EXPECT_FALSE(test, hermos_is_proc_exited(local_pid));
+}
+
+void test_case_participant_euid(struct kunit * test)
+{
+  struct ipc_namespace * ns = current->nsproxy->ipc_ns;
+  const pid_t owner = pid++;
+  union ioctl_add_process_args app;
+  union ioctl_add_subscriber_args sub;
+  union ioctl_add_publisher_args pub;
+  union ioctl_publish_msg_args publish;
+  struct ioctl_add_bridge_args bridge;
+  struct ioctl_add_discovery_agent_args agent;
+  struct ioctl_add_unlink_daemon_args daemon;
+  union ioctl_receive_msg_args rx;
+  union ioctl_take_msg_args take;
+  const char * topic = "/kunit_euid";
+
+  KUNIT_ASSERT_EQ(test, hermos_ioctl_add_process(owner, ns, false, 0, &app), 0);
+  KUNIT_ASSERT_EQ(test, hermos_ioctl_add_subscriber(
+    topic, ns, "sub", owner, 1, false, true, false, false, false, &sub), 0);
+  const topic_local_id_t id = sub.ret_id;
+  KUNIT_ASSERT_EQ(test, hermos_ioctl_add_publisher(
+    topic, ns, "pub", owner, 1, false, false, &pub), 0);
+  struct cred * other = prepare_creds();
+  KUNIT_ASSERT_NOT_NULL(test, other);
+  other->euid = uid_eq(current_euid(), GLOBAL_ROOT_UID) ? KUIDT_INIT(1) : GLOBAL_ROOT_UID;
+  const struct cred * saved = override_creds(other);
+  KUNIT_EXPECT_EQ(test, hermos_ioctl_add_process(pid++, ns, false, 1, &app), -EACCES);
+  KUNIT_EXPECT_EQ(test, hermos_ioctl_add_discovery_agent(pid++, ns, 1, &agent), -EACCES);
+  KUNIT_EXPECT_EQ(test, hermos_ioctl_add_unlink_daemon(pid++, task_tgid(current), ns, &daemon),
+                  -EACCES);
+  KUNIT_EXPECT_EQ(test, hermos_ioctl_add_subscriber(
+    topic, ns, "sub", owner, 1, false, true, false, false, false, &sub), -EACCES);
+  KUNIT_EXPECT_EQ(test, PTR_ERR(hermos_bind_subscriber_notify(topic, ns, owner, id)), (long)-EACCES);
+  KUNIT_EXPECT_EQ(test, hermos_ioctl_add_bridge(topic, owner, true, ns, &bridge), -EACCES);
+  KUNIT_EXPECT_EQ(test, hermos_ioctl_publish_msg(
+    topic, ns, pub.ret_id, app.ret_addr, NULL, MAX_SUBSCRIBER_NUM, &publish, owner), -EACCES);
+  KUNIT_EXPECT_EQ(test, hermos_ioctl_receive_msg(topic, ns, id, NULL, 0, &rx, owner), -EACCES);
+  KUNIT_EXPECT_EQ(test, hermos_ioctl_take_msg(topic, ns, id, false, NULL, 0, &take, owner), -EACCES);
+  revert_creds(saved);
+  put_cred(other);
+  KUNIT_EXPECT_EQ(test, hermos_ioctl_remove_subscriber(topic, ns, id, owner), 0);
+  KUNIT_EXPECT_EQ(test, hermos_ioctl_add_process(pid++, ns, false, 1, &app), 0);
 }
 
 void test_case_add_process_many(struct kunit * test)

@@ -68,7 +68,7 @@ void test_case_take_msg_no_topic(struct kunit * test)
   struct publisher_shm_info pub_shm_infos[KUNIT_PUB_SHM_BUF_SIZE] = {0};
   int ret = hermos_ioctl_take_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, subscriber_id, allow_same_message, pub_shm_infos,
-    KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret);
+    KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret, current->tgid);
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret, -EINVAL);
@@ -93,7 +93,7 @@ void test_case_take_msg_no_subscriber(struct kunit * test)
   struct publisher_shm_info pub_shm_infos[KUNIT_PUB_SHM_BUF_SIZE] = {0};
   int ret = hermos_ioctl_take_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, subscriber_id, allow_same_message, pub_shm_infos,
-    KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret);
+    KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret, current->tgid);
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret, -EINVAL);
@@ -116,7 +116,7 @@ void test_case_take_msg_no_publish_nothing_to_take(struct kunit * test)
   struct publisher_shm_info pub_shm_infos[KUNIT_PUB_SHM_BUF_SIZE] = {0};
   int ret = hermos_ioctl_take_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, subscriber_id, allow_same_message, pub_shm_infos,
-    KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret);
+    KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret, subscriber_pid);
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret, 0);
@@ -144,7 +144,7 @@ void test_case_take_msg_take_one(struct kunit * test)
   union ioctl_publish_msg_args ioctl_publish_msg_ret;
   int ret1 = hermos_ioctl_publish_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, publisher_id, ret_addr, subscriber_ids_buf,
-    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret);
+    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret, publisher_pid);
   KUNIT_ASSERT_EQ(test, ret1, 0);
 
   const bool allow_same_message = true;
@@ -154,7 +154,7 @@ void test_case_take_msg_take_one(struct kunit * test)
   struct publisher_shm_info pub_shm_infos[KUNIT_PUB_SHM_BUF_SIZE] = {0};
   int ret2 = hermos_ioctl_take_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, subscriber_id, allow_same_message, pub_shm_infos,
-    KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret);
+    KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret, subscriber_pid);
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret2, 0);
@@ -188,12 +188,12 @@ void test_case_take_msg_take_the_first_one_when_sub_qos_depth_is_two(struct kuni
   union ioctl_publish_msg_args ioctl_publish_msg_ret1;
   int ret1 = hermos_ioctl_publish_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, publisher_id, ret_addr, subscriber_ids_buf,
-    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret1);
+    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret1, publisher_pid);
   KUNIT_ASSERT_EQ(test, ret1, 0);
   union ioctl_publish_msg_args ioctl_publish_msg_ret2;
   int ret2 = hermos_ioctl_publish_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, publisher_id, ret_addr, subscriber_ids_buf,
-    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret2);
+    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret2, publisher_pid);
   KUNIT_ASSERT_EQ(test, ret2, 0);
 
   const bool allow_same_message = true;
@@ -203,7 +203,7 @@ void test_case_take_msg_take_the_first_one_when_sub_qos_depth_is_two(struct kuni
   struct publisher_shm_info pub_shm_infos[KUNIT_PUB_SHM_BUF_SIZE] = {0};
   int ret3 = hermos_ioctl_take_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, subscriber_id, allow_same_message, pub_shm_infos,
-    KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret);
+    KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret, subscriber_pid);
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret3, 0);
@@ -237,7 +237,7 @@ void test_case_take_msg_take_one_again_with_allow_same_message(struct kunit * te
   union ioctl_publish_msg_args ioctl_publish_msg_ret;
   int ret1 = hermos_ioctl_publish_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, publisher_id, ret_addr, subscriber_ids_buf,
-    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret);
+    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret, publisher_pid);
   KUNIT_ASSERT_EQ(test, ret1, 0);
 
   union ioctl_take_msg_args ioctl_take_msg_ret1;
@@ -245,7 +245,7 @@ void test_case_take_msg_take_one_again_with_allow_same_message(struct kunit * te
   struct publisher_shm_info pub_shm_infos1[KUNIT_PUB_SHM_BUF_SIZE] = {0};
   int ret2 = hermos_ioctl_take_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, subscriber_id, allow_same_message, pub_shm_infos1,
-    KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret1);
+    KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret1, subscriber_pid);
   KUNIT_ASSERT_EQ(test, ret2, 0);
   KUNIT_ASSERT_EQ(test, ioctl_take_msg_ret1.ret_entry_id, ioctl_publish_msg_ret.ret_entry_id);
   KUNIT_ASSERT_EQ(
@@ -259,7 +259,7 @@ void test_case_take_msg_take_one_again_with_allow_same_message(struct kunit * te
   struct publisher_shm_info pub_shm_infos2[KUNIT_PUB_SHM_BUF_SIZE] = {0};
   int ret3 = hermos_ioctl_take_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, subscriber_id, allow_same_message, pub_shm_infos2,
-    KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret2);
+    KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret2, subscriber_pid);
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret3, 0);
@@ -293,7 +293,7 @@ void test_case_take_msg_take_one_again_not_allow_same_message(struct kunit * tes
   union ioctl_publish_msg_args ioctl_publish_msg_ret;
   int ret1 = hermos_ioctl_publish_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, publisher_id, ret_addr, subscriber_ids_buf,
-    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret);
+    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret, publisher_pid);
   KUNIT_ASSERT_EQ(test, ret1, 0);
 
   union ioctl_take_msg_args ioctl_take_msg_ret1;
@@ -301,7 +301,7 @@ void test_case_take_msg_take_one_again_not_allow_same_message(struct kunit * tes
   struct publisher_shm_info pub_shm_infos1[KUNIT_PUB_SHM_BUF_SIZE] = {0};
   int ret2 = hermos_ioctl_take_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, subscriber_id, allow_same_message, pub_shm_infos1,
-    KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret1);
+    KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret1, subscriber_pid);
   KUNIT_ASSERT_EQ(test, ret2, 0);
   KUNIT_ASSERT_EQ(test, ioctl_take_msg_ret1.ret_entry_id, ioctl_publish_msg_ret.ret_entry_id);
   KUNIT_ASSERT_EQ(
@@ -315,7 +315,7 @@ void test_case_take_msg_take_one_again_not_allow_same_message(struct kunit * tes
   struct publisher_shm_info pub_shm_infos2[KUNIT_PUB_SHM_BUF_SIZE] = {0};
   int ret3 = hermos_ioctl_take_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, subscriber_id, allow_same_message, pub_shm_infos2,
-    KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret2);
+    KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret2, subscriber_pid);
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret3, 0);
@@ -344,12 +344,12 @@ void test_case_take_msg_sub_qos_depth_smaller_than_publish_num_smaller_than_pub_
   union ioctl_publish_msg_args ioctl_publish_msg_ret1;
   int ret1 = hermos_ioctl_publish_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, publisher_id, ret_addr, subscriber_ids_buf,
-    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret1);
+    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret1, publisher_pid);
   KUNIT_ASSERT_EQ(test, ret1, 0);
   union ioctl_publish_msg_args ioctl_publish_msg_ret2;
   int ret2 = hermos_ioctl_publish_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, publisher_id, ret_addr + 1, subscriber_ids_buf,
-    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret2);
+    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret2, publisher_pid);
   KUNIT_ASSERT_EQ(test, ret2, 0);
 
   const bool allow_same_message = true;
@@ -359,7 +359,7 @@ void test_case_take_msg_sub_qos_depth_smaller_than_publish_num_smaller_than_pub_
   struct publisher_shm_info pub_shm_infos[KUNIT_PUB_SHM_BUF_SIZE] = {0};
   int ret3 = hermos_ioctl_take_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, subscriber_id, allow_same_message, pub_shm_infos,
-    KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret);
+    KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret, subscriber_pid);
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret3, 0);
@@ -394,7 +394,7 @@ void test_case_take_msg_publish_num_smaller_than_sub_qos_depth_smaller_than_pub_
   union ioctl_publish_msg_args ioctl_publish_msg_ret;
   int ret1 = hermos_ioctl_publish_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, publisher_id, ret_addr, subscriber_ids_buf,
-    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret);
+    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret, publisher_pid);
   KUNIT_ASSERT_EQ(test, ret1, 0);
 
   const bool allow_same_message = true;
@@ -404,7 +404,7 @@ void test_case_take_msg_publish_num_smaller_than_sub_qos_depth_smaller_than_pub_
   struct publisher_shm_info pub_shm_infos[KUNIT_PUB_SHM_BUF_SIZE] = {0};
   int ret2 = hermos_ioctl_take_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, subscriber_id, allow_same_message, pub_shm_infos,
-    KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret);
+    KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret, subscriber_pid);
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret2, 0);
@@ -441,13 +441,13 @@ void test_case_take_msg_sub_qos_depth_smaller_than_pub_qos_depth_smaller_than_pu
     union ioctl_publish_msg_args ioctl_publish_msg_ret;
     int ret = hermos_ioctl_publish_msg(
       TOPIC_NAME, current->nsproxy->ipc_ns, publisher_id, ret_addr + i, subscriber_ids_buf,
-      ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret);
+      ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret, publisher_pid);
     KUNIT_ASSERT_EQ(test, ret, 0);
   }
   union ioctl_publish_msg_args ioctl_publish_msg_ret;
   int ret1 = hermos_ioctl_publish_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, publisher_id, ret_addr + qos_depth + 1,
-    subscriber_ids_buf, ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret);
+    subscriber_ids_buf, ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret, publisher_pid);
   KUNIT_ASSERT_EQ(test, ret1, 0);
 
   const bool allow_same_message = true;
@@ -457,7 +457,7 @@ void test_case_take_msg_sub_qos_depth_smaller_than_pub_qos_depth_smaller_than_pu
   struct publisher_shm_info pub_shm_infos[KUNIT_PUB_SHM_BUF_SIZE] = {0};
   int ret2 = hermos_ioctl_take_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, subscriber_id, allow_same_message, pub_shm_infos,
-    KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret);
+    KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret, subscriber_pid);
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret2, 0);
@@ -493,14 +493,14 @@ void test_case_take_msg_publish_num_and_sub_qos_depth_and_pub_qos_depth_are_all_
   union ioctl_publish_msg_args ioctl_publish_msg_ret;
   int ret = hermos_ioctl_publish_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, publisher_id, ret_addr, subscriber_ids_buf,
-    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret);
+    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret, publisher_pid);
   KUNIT_ASSERT_EQ(test, ret, 0);
 
   for (uint32_t i = 0; i < qos_depth - 1; i++) {
     union ioctl_publish_msg_args ioctl_publish_msg_ret;
     int ret = hermos_ioctl_publish_msg(
       TOPIC_NAME, current->nsproxy->ipc_ns, publisher_id, ret_addr, subscriber_ids_buf,
-      ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret);
+      ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret, publisher_pid);
     KUNIT_ASSERT_EQ(test, ret, 0);
   }
 
@@ -511,7 +511,7 @@ void test_case_take_msg_publish_num_and_sub_qos_depth_and_pub_qos_depth_are_all_
   struct publisher_shm_info pub_shm_infos[KUNIT_PUB_SHM_BUF_SIZE] = {0};
   int ret3 = hermos_ioctl_take_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, subscriber_id, allow_same_message, pub_shm_infos,
-    KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret);
+    KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret, subscriber_pid);
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret3, 0);
@@ -540,7 +540,7 @@ void test_case_take_msg_transient_local_sub_qos_and_pub_qos_and_publish_num_are_
   union ioctl_publish_msg_args ioctl_publish_msg_ret;
   int ret1 = hermos_ioctl_publish_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, publisher_id, ret_addr, subscriber_ids_buf,
-    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret);
+    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret, publisher_pid);
   KUNIT_ASSERT_EQ(test, ret1, 0);
 
   topic_local_id_t subscriber_id;
@@ -557,7 +557,7 @@ void test_case_take_msg_transient_local_sub_qos_and_pub_qos_and_publish_num_are_
   struct publisher_shm_info pub_shm_infos[KUNIT_PUB_SHM_BUF_SIZE] = {0};
   int ret2 = hermos_ioctl_take_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, subscriber_id, allow_same_message, pub_shm_infos,
-    KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret);
+    KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret, subscriber_pid);
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret2, 0);
@@ -582,19 +582,19 @@ void test_case_take_msg_transient_local_sub_qos_smaller_than_pub_qos_smaller_tha
   union ioctl_publish_msg_args ioctl_publish_msg_ret1;
   int ret1 = hermos_ioctl_publish_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, publisher_id, ret_addr, subscriber_ids_buf,
-    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret1);
+    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret1, publisher_pid);
   KUNIT_ASSERT_EQ(test, ret1, 0);
 
   union ioctl_publish_msg_args ioctl_publish_msg_ret2;
   int ret2 = hermos_ioctl_publish_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, publisher_id, ret_addr + 1, subscriber_ids_buf,
-    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret2);
+    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret2, publisher_pid);
   KUNIT_ASSERT_EQ(test, ret2, 0);
 
   union ioctl_publish_msg_args ioctl_publish_msg_ret3;
   int ret3 = hermos_ioctl_publish_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, publisher_id, ret_addr, subscriber_ids_buf,
-    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret3);
+    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret3, publisher_pid);
   KUNIT_ASSERT_EQ(test, ret3, 0);
 
   topic_local_id_t subscriber_id;
@@ -611,7 +611,7 @@ void test_case_take_msg_transient_local_sub_qos_smaller_than_pub_qos_smaller_tha
   struct publisher_shm_info pub_shm_infos[KUNIT_PUB_SHM_BUF_SIZE] = {0};
   int ret4 = hermos_ioctl_take_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, subscriber_id, allow_same_message, pub_shm_infos,
-    KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret);
+    KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret, subscriber_pid);
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret4, 0);
@@ -641,13 +641,13 @@ void test_case_take_msg_transient_local_sub_qos_smaller_than_publish_num_smaller
   union ioctl_publish_msg_args ioctl_publish_msg_ret1;
   int ret1 = hermos_ioctl_publish_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, publisher_id, ret_addr, subscriber_ids_buf,
-    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret1);
+    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret1, publisher_pid);
   KUNIT_ASSERT_EQ(test, ret1, 0);
 
   union ioctl_publish_msg_args ioctl_publish_msg_ret2;
   int ret2 = hermos_ioctl_publish_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, publisher_id, ret_addr + 1, subscriber_ids_buf,
-    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret2);
+    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret2, publisher_pid);
   KUNIT_ASSERT_EQ(test, ret2, 0);
 
   topic_local_id_t subscriber_id;
@@ -664,7 +664,7 @@ void test_case_take_msg_transient_local_sub_qos_smaller_than_publish_num_smaller
   struct publisher_shm_info pub_shm_infos[KUNIT_PUB_SHM_BUF_SIZE] = {0};
   int ret4 = hermos_ioctl_take_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, subscriber_id, allow_same_message, pub_shm_infos,
-    KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret);
+    KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret, subscriber_pid);
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret4, 0);
@@ -693,13 +693,13 @@ void test_case_take_msg_transient_local_publish_num_smaller_than_sub_qos_smaller
   union ioctl_publish_msg_args ioctl_publish_msg_ret1;
   int ret1 = hermos_ioctl_publish_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, publisher_id, ret_addr, subscriber_ids_buf,
-    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret1);
+    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret1, publisher_pid);
   KUNIT_ASSERT_EQ(test, ret1, 0);
 
   union ioctl_publish_msg_args ioctl_publish_msg_ret2;
   int ret2 = hermos_ioctl_publish_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, publisher_id, ret_addr + 1, subscriber_ids_buf,
-    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret2);
+    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret2, publisher_pid);
   KUNIT_ASSERT_EQ(test, ret2, 0);
 
   topic_local_id_t subscriber_id;
@@ -716,7 +716,7 @@ void test_case_take_msg_transient_local_publish_num_smaller_than_sub_qos_smaller
   struct publisher_shm_info pub_shm_infos[KUNIT_PUB_SHM_BUF_SIZE] = {0};
   int ret4 = hermos_ioctl_take_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, subscriber_id, allow_same_message, pub_shm_infos,
-    KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret);
+    KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret, subscriber_pid);
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret4, 0);
@@ -757,7 +757,7 @@ void test_case_take_msg_one_new_pub(struct kunit * test)
   struct publisher_shm_info pub_shm_infos[KUNIT_PUB_SHM_BUF_SIZE] = {0};
   int ret = hermos_ioctl_take_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, subscriber_id, allow_same_message, pub_shm_infos,
-    KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret);
+    KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret, subscriber_pid);
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret, 0);
@@ -797,7 +797,7 @@ void test_case_take_msg_pubsub_in_same_process(struct kunit * test)
   struct publisher_shm_info pub_shm_infos[KUNIT_PUB_SHM_BUF_SIZE] = {0};
   int ret4 = hermos_ioctl_take_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, add_subscriber_args.ret_id, allow_same_message,
-    pub_shm_infos, KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret);
+    pub_shm_infos, KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret, pid);
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret4, 0);
@@ -844,7 +844,7 @@ void test_case_take_msg_2pub_in_same_process(struct kunit * test)
   struct publisher_shm_info pub_shm_infos[KUNIT_PUB_SHM_BUF_SIZE] = {0};
   int ret4 = hermos_ioctl_take_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, subscriber_id, allow_same_message, pub_shm_infos,
-    KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret);
+    KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret, subscriber_pid);
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret4, 0);
@@ -892,7 +892,7 @@ void test_case_take_msg_2sub_in_same_process(struct kunit * test)
   struct publisher_shm_info pub_shm_infos[KUNIT_PUB_SHM_BUF_SIZE] = {0};
   int ret4 = hermos_ioctl_take_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, add_subscriber_args1.ret_id, allow_same_message,
-    pub_shm_infos, KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret);
+    pub_shm_infos, KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret, subscriber_pid);
   KUNIT_ASSERT_EQ(test, ret4, 0);
   KUNIT_ASSERT_EQ(test, ioctl_take_msg_ret.ret_addr, 0);
   KUNIT_ASSERT_EQ(test, ioctl_take_msg_ret.ret_pub_shm_num, 1);
@@ -903,7 +903,7 @@ void test_case_take_msg_2sub_in_same_process(struct kunit * test)
   struct publisher_shm_info pub_shm_infos2[KUNIT_PUB_SHM_BUF_SIZE] = {0};
   int ret5 = hermos_ioctl_take_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, add_subscriber_args2.ret_id, allow_same_message,
-    pub_shm_infos2, KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret);
+    pub_shm_infos2, KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret, subscriber_pid);
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret5, 0);
@@ -927,7 +927,7 @@ void test_case_take_msg_with_exited_publisher(struct kunit * test)
   union ioctl_publish_msg_args ioctl_publish_msg_ret;
   int ret1 = hermos_ioctl_publish_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, publisher_id, msg_addr, subscriber_ids_buf,
-    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret);
+    ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret, publisher_pid);
 
   topic_local_id_t subscriber_id1;
   const pid_t subscriber_pid1 = 2000;
@@ -937,7 +937,7 @@ void test_case_take_msg_with_exited_publisher(struct kunit * test)
   struct publisher_shm_info pub_shm_infos1[KUNIT_PUB_SHM_BUF_SIZE] = {0};
   int ret2 = hermos_ioctl_take_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, subscriber_id1, allow_same_message, pub_shm_infos1,
-    KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret1);
+    KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret1, subscriber_pid1);
 
   hermos_enqueue_exit_pid(publisher_pid);
 
@@ -1000,7 +1000,7 @@ void test_case_take_msg_with_exited_publisher(struct kunit * test)
   struct publisher_shm_info pub_shm_infos2[KUNIT_PUB_SHM_BUF_SIZE] = {0};
   int ret5 = hermos_ioctl_take_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, subscriber_id2, allow_same_message, pub_shm_infos2,
-    KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret2);
+    KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret2, subscriber_pid2);
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret5, 0);
@@ -1041,7 +1041,7 @@ void test_case_take_msg_ignore_local_same_pid_enabled(struct kunit * test)
   union ioctl_publish_msg_args ioctl_publish_msg_ret;
   int ret4 = hermos_ioctl_publish_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, add_publisher_args.ret_id, add_process_args.ret_addr,
-    subscriber_ids_buf, ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret);
+    subscriber_ids_buf, ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret, pid);
   KUNIT_ASSERT_EQ(test, ret4, 0);
 
   // Act: take_msg should not return the message from the same process
@@ -1049,7 +1049,7 @@ void test_case_take_msg_ignore_local_same_pid_enabled(struct kunit * test)
   struct publisher_shm_info pub_shm_infos[KUNIT_PUB_SHM_BUF_SIZE] = {0};
   int ret5 = hermos_ioctl_take_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, add_subscriber_args.ret_id, allow_same_message,
-    pub_shm_infos, KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret);
+    pub_shm_infos, KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret, pid);
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret5, 0);
@@ -1086,7 +1086,7 @@ void test_case_take_msg_ignore_local_same_pid_disabled(struct kunit * test)
   union ioctl_publish_msg_args ioctl_publish_msg_ret;
   int ret4 = hermos_ioctl_publish_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, add_publisher_args.ret_id, add_process_args.ret_addr,
-    subscriber_ids_buf, ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret);
+    subscriber_ids_buf, ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret, pid);
   KUNIT_ASSERT_EQ(test, ret4, 0);
 
   // Act: take_msg should return the message from the same process
@@ -1094,10 +1094,38 @@ void test_case_take_msg_ignore_local_same_pid_disabled(struct kunit * test)
   struct publisher_shm_info pub_shm_infos[KUNIT_PUB_SHM_BUF_SIZE] = {0};
   int ret5 = hermos_ioctl_take_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, add_subscriber_args.ret_id, allow_same_message,
-    pub_shm_infos, KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret);
+    pub_shm_infos, KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret, pid);
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret5, 0);
   KUNIT_EXPECT_EQ(test, ioctl_take_msg_ret.ret_entry_id, ioctl_publish_msg_ret.ret_entry_id);
   KUNIT_EXPECT_EQ(test, ioctl_take_msg_ret.ret_addr, add_process_args.ret_addr);
 }
+
+void test_case_take_msg_wrong_owner(struct kunit * test)
+{
+  topic_local_id_t subscriber_id, publisher_id;
+  uint64_t addr;
+  setup_one_subscriber(test, 2000, 1, false, &subscriber_id);
+  setup_one_publisher(test, 1000, 1, false, &publisher_id, &addr);
+  union ioctl_publish_msg_args published = {};
+  KUNIT_ASSERT_EQ(test, hermos_ioctl_publish_msg(
+    TOPIC_NAME, current->nsproxy->ipc_ns, publisher_id, addr, subscriber_ids_buf,
+    ARRAY_SIZE(subscriber_ids_buf), &published, 1000), 0);
+  const int64_t before = hermos_get_latest_received_entry_id(
+    TOPIC_NAME, current->nsproxy->ipc_ns, subscriber_id);
+  union ioctl_take_msg_args result = {};
+  struct publisher_shm_info info[1] = {};
+  KUNIT_EXPECT_EQ(test, hermos_ioctl_take_msg(
+    TOPIC_NAME, current->nsproxy->ipc_ns, subscriber_id, false, info, 1, &result, 2001), -EPERM);
+  KUNIT_EXPECT_EQ(test, hermos_get_latest_received_entry_id(
+    TOPIC_NAME, current->nsproxy->ipc_ns, subscriber_id), before);
+  KUNIT_EXPECT_EQ(test, hermos_get_entry_rc(
+    TOPIC_NAME, current->nsproxy->ipc_ns, published.ret_entry_id, subscriber_id), 0);
+  KUNIT_ASSERT_EQ(test, hermos_ioctl_take_msg(
+    TOPIC_NAME, current->nsproxy->ipc_ns, subscriber_id, false, info, 1, &result, 2000), 0);
+  KUNIT_EXPECT_EQ(test, result.ret_entry_id, published.ret_entry_id);
+  KUNIT_EXPECT_EQ(test, hermos_get_latest_received_entry_id(
+    TOPIC_NAME, current->nsproxy->ipc_ns, subscriber_id), published.ret_entry_id);
+}
+

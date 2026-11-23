@@ -51,7 +51,7 @@ void test_endpoint_stats_history_and_references(struct kunit * test)
   for (int index = 0; index < 3; index++) {
     KUNIT_ASSERT_EQ(test, hermos_ioctl_publish_msg(
       topic, current->nsproxy->ipc_ns, pub, address + index * 16,
-      notification_ids, MAX_SUBSCRIBER_NUM, &published), 0);
+      notification_ids, MAX_SUBSCRIBER_NUM, &published, 6000), 0);
   }
   struct endpoint_stats_ret row;
   snapshot(test, 0, true, &row);
@@ -69,7 +69,7 @@ void test_endpoint_stats_history_and_references(struct kunit * test)
   union ioctl_receive_msg_args received = {0};
   struct publisher_shm_info mappings[2];
   KUNIT_ASSERT_EQ(test, hermos_ioctl_receive_msg(
-    topic, current->nsproxy->ipc_ns, sub, mappings, 2, &received), 0);
+    topic, current->nsproxy->ipc_ns, sub, mappings, 2, &received, 6001), 0);
   KUNIT_ASSERT_EQ(test, received.ret_entry_num, (uint16_t)1);
   snapshot(test, 0, false, &row);
   KUNIT_EXPECT_EQ(test, row.received_total, (uint64_t)1);
@@ -78,7 +78,7 @@ void test_endpoint_stats_history_and_references(struct kunit * test)
   KUNIT_EXPECT_EQ(test, hermos_get_entry_rc(
     topic, current->nsproxy->ipc_ns, received.ret_entry_ids[0], sub), 1);
   KUNIT_ASSERT_EQ(test, hermos_ioctl_release_message_entry_reference(
-    topic, current->nsproxy->ipc_ns, sub, received.ret_entry_ids[0]), 0);
+    topic, current->nsproxy->ipc_ns, sub, received.ret_entry_ids[0], 6001), 0);
   snapshot(test, 0, false, &row);
   KUNIT_EXPECT_EQ(test, row.retained_entries, (uint64_t)0);
   KUNIT_EXPECT_EQ(test, row.received_total, (uint64_t)1);
@@ -116,11 +116,11 @@ void test_endpoint_stats_excludes_exited_endpoints(struct kunit * test)
   union ioctl_publish_msg_args published = {0};
   KUNIT_ASSERT_EQ(test, hermos_ioctl_publish_msg(
     topic, current->nsproxy->ipc_ns, pub, address,
-    notification_ids, MAX_SUBSCRIBER_NUM, &published), 0);
+    notification_ids, MAX_SUBSCRIBER_NUM, &published, 6020), 0);
   union ioctl_receive_msg_args received = {0};
   struct publisher_shm_info mappings[2];
   KUNIT_ASSERT_EQ(test, hermos_ioctl_receive_msg(
-    topic, current->nsproxy->ipc_ns, holding, mappings, 2, &received), 0);
+    topic, current->nsproxy->ipc_ns, holding, mappings, 2, &received, 6021), 0);
   KUNIT_ASSERT_EQ(test, received.ret_entry_num, (uint16_t)1);
 
   hermos_process_exit_cleanup(6020);
@@ -175,14 +175,14 @@ void test_endpoint_stats_removed_publisher_keeps_held_reference(struct kunit * t
   union ioctl_publish_msg_args published = {0};
   KUNIT_ASSERT_EQ(test, hermos_ioctl_publish_msg(
     topic, current->nsproxy->ipc_ns, pub, address,
-    notification_ids, MAX_SUBSCRIBER_NUM, &published), 0);
+    notification_ids, MAX_SUBSCRIBER_NUM, &published, 6040), 0);
   union ioctl_receive_msg_args received = {0};
   struct publisher_shm_info mappings[2];
   KUNIT_ASSERT_EQ(test, hermos_ioctl_receive_msg(
-    topic, current->nsproxy->ipc_ns, sub, mappings, 2, &received), 0);
+    topic, current->nsproxy->ipc_ns, sub, mappings, 2, &received, 6041), 0);
   KUNIT_ASSERT_EQ(test, received.ret_entry_num, (uint16_t)1);
   KUNIT_ASSERT_EQ(test, hermos_ioctl_remove_publisher(
-    topic, current->nsproxy->ipc_ns, pub), 0);
+    topic, current->nsproxy->ipc_ns, pub, 6040), 0);
   struct endpoint_stats_ret row;
   uint32_t count = 42;
   KUNIT_ASSERT_EQ(test, hermos_get_endpoint_stats(
@@ -193,7 +193,7 @@ void test_endpoint_stats_removed_publisher_keeps_held_reference(struct kunit * t
   KUNIT_EXPECT_EQ(test, hermos_get_entry_rc(
     topic, current->nsproxy->ipc_ns, received.ret_entry_ids[0], sub), 1);
   KUNIT_EXPECT_EQ(test, hermos_ioctl_release_message_entry_reference(
-    topic, current->nsproxy->ipc_ns, sub, received.ret_entry_ids[0]), 0);
+    topic, current->nsproxy->ipc_ns, sub, received.ret_entry_ids[0], 6041), 0);
 }
 
 void test_endpoint_stats_take_same_message_counts_once(struct kunit * test)
@@ -210,11 +210,11 @@ void test_endpoint_stats_take_same_message_counts_once(struct kunit * test)
   union ioctl_publish_msg_args published = {0};
   KUNIT_ASSERT_EQ(test, hermos_ioctl_publish_msg(
     topic, current->nsproxy->ipc_ns, pub, address,
-    notification_ids, MAX_SUBSCRIBER_NUM, &published), 0);
+    notification_ids, MAX_SUBSCRIBER_NUM, &published, 6050), 0);
   struct publisher_shm_info mappings[2];
   union ioctl_take_msg_args taken = {0};
   KUNIT_ASSERT_EQ(test, hermos_ioctl_take_msg(
-    topic, current->nsproxy->ipc_ns, added.ret_id, false, mappings, 2, &taken), 0);
+    topic, current->nsproxy->ipc_ns, added.ret_id, false, mappings, 2, &taken, 6051), 0);
   KUNIT_ASSERT_EQ(test, taken.ret_entry_id, published.ret_entry_id);
   struct endpoint_stats_ret row;
   snapshot(test, 0, false, &row);
@@ -223,7 +223,7 @@ void test_endpoint_stats_take_same_message_counts_once(struct kunit * test)
   KUNIT_EXPECT_EQ(test, row.queued_entries, (uint64_t)0);
 
   KUNIT_ASSERT_EQ(test, hermos_ioctl_take_msg(
-    topic, current->nsproxy->ipc_ns, added.ret_id, true, mappings, 2, &taken), 0);
+    topic, current->nsproxy->ipc_ns, added.ret_id, true, mappings, 2, &taken, 6051), 0);
   KUNIT_EXPECT_EQ(test, taken.ret_entry_id, published.ret_entry_id);
   snapshot(test, 0, false, &row);
   KUNIT_EXPECT_EQ(test, row.received_total, (uint64_t)1);
@@ -246,7 +246,7 @@ void test_endpoint_stats_ignore_local_publications(struct kunit * test)
   for (int index = 0; index < 3; index++) {
     KUNIT_ASSERT_EQ(test, hermos_ioctl_publish_msg(
       topic, current->nsproxy->ipc_ns, pub, address + index * 16,
-      notification_ids, MAX_SUBSCRIBER_NUM, &published), 0);
+      notification_ids, MAX_SUBSCRIBER_NUM, &published, 6060), 0);
     KUNIT_EXPECT_EQ(test, published.ret_subscriber_num, 0U);
   }
   struct endpoint_stats_ret row;
@@ -271,7 +271,7 @@ static void check_domain_direction(struct kunit * test, bool allowed)
   for (int index = 0; index < 3; index++) {
     KUNIT_ASSERT_EQ(test, hermos_ioctl_publish_msg(
       topic, current->nsproxy->ipc_ns, pub, address + index * 16,
-      notification_ids, MAX_SUBSCRIBER_NUM, &published), 0);
+      notification_ids, MAX_SUBSCRIBER_NUM, &published, current->tgid), 0);
     KUNIT_EXPECT_EQ(test, published.ret_subscriber_num, (uint32_t)allowed);
   }
   struct endpoint_stats_ret row;

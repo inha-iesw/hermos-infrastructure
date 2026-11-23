@@ -450,25 +450,28 @@ int hermos_ioctl_add_publisher(
   const pid_t publisher_pid, const uint32_t qos_depth, const bool qos_is_transient_local,
   const bool is_bridge, union ioctl_add_publisher_args * ioctl_ret);
 
+// caller_pid below is trusted kernel identity (current->tgid in the ioctl dispatcher),
+// never a userspace-supplied field. Explicit identity also permits synthetic KUnit callers.
 int hermos_ioctl_release_message_entry_reference(
   const char * topic_name, const struct ipc_namespace * ipc_ns, const topic_local_id_t pubsub_id,
-  const int64_t entry_id);
+  const int64_t entry_id, const pid_t caller_pid);
 
 int hermos_ioctl_receive_msg(
   const char * topic_name, const struct ipc_namespace * ipc_ns,
   const topic_local_id_t subscriber_id, struct publisher_shm_info * pub_shm_infos,
-  uint32_t pub_shm_infos_size, union ioctl_receive_msg_args * ioctl_ret);
+  uint32_t pub_shm_infos_size, union ioctl_receive_msg_args * ioctl_ret, const pid_t caller_pid);
 
 int hermos_ioctl_publish_msg(
   const char * topic_name, const struct ipc_namespace * ipc_ns, const topic_local_id_t publisher_id,
   const uint64_t msg_virtual_address, topic_local_id_t * subscriber_ids_out,
-  uint32_t subscriber_ids_buffer_size, union ioctl_publish_msg_args * ioctl_ret);
+  uint32_t subscriber_ids_buffer_size, union ioctl_publish_msg_args * ioctl_ret,
+  const pid_t caller_pid);
 
 int hermos_ioctl_take_msg(
   const char * topic_name, const struct ipc_namespace * ipc_ns,
   const topic_local_id_t subscriber_id, bool allow_same_message,
   struct publisher_shm_info * pub_shm_infos, uint32_t pub_shm_infos_size,
-  union ioctl_take_msg_args * ioctl_ret);
+  union ioctl_take_msg_args * ioctl_ret, const pid_t caller_pid);
 
 int hermos_ioctl_add_process(
   const pid_t pid, const struct ipc_namespace * ipc_ns, const bool is_performance_bridge_manager,
@@ -494,10 +497,12 @@ int hermos_ioctl_get_publisher_qos(
   struct ioctl_get_publisher_qos_args * args);
 
 int hermos_ioctl_remove_subscriber(
-  const char * topic_name, const struct ipc_namespace * ipc_ns, topic_local_id_t subscriber_id);
+  const char * topic_name, const struct ipc_namespace * ipc_ns, topic_local_id_t subscriber_id,
+  const pid_t caller_pid);
 
 int hermos_ioctl_remove_publisher(
-  const char * topic_name, const struct ipc_namespace * ipc_ns, topic_local_id_t publisher_id);
+  const char * topic_name, const struct ipc_namespace * ipc_ns, topic_local_id_t publisher_id,
+  const pid_t caller_pid);
 
 int hermos_ioctl_add_bridge(
   const char * topic_name, const pid_t pid, bool is_r2a, const struct ipc_namespace * ipc_ns,

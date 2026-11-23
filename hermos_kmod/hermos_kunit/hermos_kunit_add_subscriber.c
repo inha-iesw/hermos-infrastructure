@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only OR BSD-2-Clause
 #include "hermos_kunit_add_subscriber.h"
 
-#include "../hermos.h"
+#include "../hermos_internal.h"
 #include "../hermos_memory_allocator.h"
 
 #include <kunit/test.h>
@@ -127,3 +127,37 @@ void test_case_add_subscriber_too_many_subscribers(struct kunit * test)
   // Assert
   KUNIT_EXPECT_EQ(test, ret, -ENOBUFS);
 }
+
+void test_case_add_subscriber_requires_registration(struct kunit * test)
+{
+  union ioctl_add_subscriber_args result = {};
+  KUNIT_EXPECT_EQ(test, hermos_ioctl_add_subscriber(
+    TOPIC_NAME, current->nsproxy->ipc_ns, NODE_NAME, 1000, 1, false, true, false, false, false,
+    &result), -EINVAL);
+  KUNIT_EXPECT_EQ(test, hermos_get_topic_num(current->nsproxy->ipc_ns), 0);
+}
+
+void test_case_add_subscriber_rejects_exited_process(struct kunit * test)
+{
+  setup_process(test, 1000);
+  hermos_process_exit_cleanup(1000);
+  KUNIT_ASSERT_TRUE(test, hermos_is_proc_exited(1000));
+  union ioctl_add_subscriber_args result = {};
+  KUNIT_EXPECT_EQ(test, hermos_ioctl_add_subscriber(
+    TOPIC_NAME, current->nsproxy->ipc_ns, NODE_NAME, 1000, 1, false, true, false, false, false,
+    &result), -EINVAL);
+  KUNIT_EXPECT_EQ(test, hermos_get_topic_num(current->nsproxy->ipc_ns), 0);
+}
+
+void test_case_add_subscriber_rejects_namespace_mismatch(struct kunit * test)
+{
+  struct ipc_namespace * other_ns = kunit_kzalloc(test, sizeof(*other_ns), GFP_KERNEL);
+  KUNIT_ASSERT_NOT_NULL(test, other_ns);
+  setup_process(test, 1000);
+  union ioctl_add_subscriber_args result = {};
+  KUNIT_EXPECT_EQ(test, hermos_ioctl_add_subscriber(
+    TOPIC_NAME, other_ns, NODE_NAME, 1000, 1, false, true, false, false, false, &result), -EINVAL);
+  KUNIT_EXPECT_EQ(test, hermos_get_topic_num(other_ns), 0);
+  KUNIT_EXPECT_EQ(test, hermos_get_topic_num(current->nsproxy->ipc_ns), 0);
+}
+

@@ -62,6 +62,18 @@ static uint32_t get_process_domain_id(pid_t pid)
   return proc_info ? proc_info->domain_id : 0;
 }
 
+// Resolve the endpoint in its process's registered domain and credential context. A missing
+// registration retains the domain-0 lookup so existing endpoint/PID errors remain observable.
+static int find_endpoint_topic(
+  const char * name, const struct ipc_namespace * ipc_ns, pid_t pid, struct topic_wrapper ** out)
+{
+  const struct process_info * proc = hermos_find_process_info(pid);
+  if (proc && (!ipc_eq(proc->ipc_ns, ipc_ns) || !uid_eq(proc->euid, current_euid())))
+    return -EACCES;
+  *out = hermos_find_topic(name, ipc_ns, proc ? proc->domain_id : 0);
+  return *out ? 0 : -EINVAL;
+}
+
 static uint32_t get_current_domain_id(void)
 {
   return get_process_domain_id(current->tgid);
@@ -445,16 +457,17 @@ static int get_alive_process_num_in_domain(
 // Called when subscriber's last ipc_shared_ptr reference is destroyed.
 int hermos_ioctl_release_message_entry_reference(
   const char * topic_name, const struct ipc_namespace * ipc_ns, const topic_local_id_t pubsub_id,
-  const int64_t entry_id)
+  const int64_t entry_id, const pid_t caller_pid)
 {
   int ret = 0;
 
   down_read(&global_htables_rwsem);
 
-  struct topic_wrapper * wrapper = find_topic_for_current(topic_name, ipc_ns);
-  if (!wrapper) {
-    dev_warn(hermos_device, "Topic (topic_name=%s) not found. (%s)\n", topic_name, __func__);
-    ret = -EINVAL;
+  struct topic_wrapper * wrapper;
+  ret = find_endpoint_topic(topic_name, ipc_ns, caller_pid, &wrapper);
+  if (ret) {
+    if (ret == -EINVAL)
+      dev_warn(hermos_device, "Topic (topic_name=%s) not found. (%s)\n", topic_name, __func__);
     goto unlock_only_global;
   }
 
@@ -476,6 +489,16 @@ int hermos_ioctl_release_message_entry_reference(
       hermos_device, "pubsub_id %d out of range [0, %d). (%s)\n", pubsub_id, MAX_TOPIC_LOCAL_ID,
       __func__);
     ret = -EINVAL;
+    goto unlock_all;
+  }
+
+  const struct subscriber_info * sub_info = find_subscriber_info(wrapper, pubsub_id);
+  if (!sub_info) {
+    ret = -EINVAL;
+    goto unlock_all;
+  }
+  if (sub_info->pid != caller_pid) {
+    ret = -EPERM;
     goto unlock_all;
   }
 
@@ -651,6 +674,25 @@ static bool has_alive_performance_bridge_manager(
   return false;
 }
 
+// The first participant claims an IPC namespace until all processes (including pending exit
+// cleanup) and helpers have gone. All registrations hold global_htables_rwsem for writing.
+static bool namespace_accepts_euid(const struct ipc_namespace * ipc_ns)
+{
+  struct process_info * proc;
+  struct discovery_agent_info * agent;
+  int bkt;
+  hash_for_each(proc_info_htable, bkt, proc, node)
+  {
+    if (ipc_eq(proc->ipc_ns, ipc_ns)) return uid_eq(proc->euid, current_euid());
+  }
+  hash_for_each(discovery_agent_htable, bkt, agent, node)
+  {
+    if (ipc_eq(agent->ipc_ns, ipc_ns)) return uid_eq(agent->euid, current_euid());
+  }
+  struct unlink_daemon_info * daemon = hermos_find_unlink_daemon(ipc_ns);
+  return !daemon || !hermos_unlink_daemon_is_alive(daemon) || uid_eq(daemon->euid, current_euid());
+}
+
 int hermos_ioctl_add_process(
   const pid_t pid, const struct ipc_namespace * ipc_ns, const bool is_performance_bridge_manager,
   const uint32_t domain_id, union ioctl_add_process_args * ioctl_ret)
@@ -658,6 +700,10 @@ int hermos_ioctl_add_process(
   int ret = 0;
 
   down_write(&global_htables_rwsem);
+  if (!namespace_accepts_euid(ipc_ns)) {
+    ret = -EACCES;
+    goto unlock;
+  }
 
   if (hermos_find_process_info(pid)) {
     dev_warn(hermos_device, "Process (pid=%d) already exists. (%s)\n", pid, __func__);
@@ -684,6 +730,7 @@ int hermos_ioctl_add_process(
     goto unlock;
   }
 
+  new_proc_info->euid = current_euid();
   new_proc_info->exited = false;
   new_proc_info->is_performance_bridge_manager = is_performance_bridge_manager;
   INIT_LIST_HEAD(&new_proc_info->exit_subscription_list);
@@ -727,8 +774,17 @@ int hermos_ioctl_add_subscriber(
 
   down_write(&global_htables_rwsem);
 
+  const struct process_info * proc_info = hermos_find_process_info(subscriber_pid);
+  if (!proc_info || proc_info->exited || !ipc_eq(proc_info->ipc_ns, ipc_ns)) {
+    ret = -EINVAL;
+    goto unlock;
+  }
+  if (!uid_eq(proc_info->euid, current_euid())) {
+    ret = -EACCES;
+    goto unlock;
+  }
   struct topic_wrapper * wrapper;
-  ret = add_topic(topic_name, ipc_ns, get_process_domain_id(subscriber_pid), &wrapper);
+  ret = add_topic(topic_name, ipc_ns, proc_info->domain_id, &wrapper);
   if (ret < 0) {
     goto unlock;
   }
@@ -759,8 +815,17 @@ int hermos_ioctl_add_publisher(
 
   down_write(&global_htables_rwsem);
 
+  const struct process_info * proc_info = hermos_find_process_info(publisher_pid);
+  if (!proc_info || proc_info->exited || !ipc_eq(proc_info->ipc_ns, ipc_ns)) {
+    ret = -EINVAL;
+    goto unlock;
+  }
+  if (!uid_eq(proc_info->euid, current_euid())) {
+    ret = -EACCES;
+    goto unlock;
+  }
   struct topic_wrapper * wrapper;
-  ret = add_topic(topic_name, ipc_ns, get_process_domain_id(publisher_pid), &wrapper);
+  ret = add_topic(topic_name, ipc_ns, proc_info->domain_id, &wrapper);
   if (ret < 0) {
     goto unlock;
   }
@@ -876,7 +941,8 @@ static int release_msgs_to_meet_depth(
 int hermos_ioctl_publish_msg(
   const char * topic_name, const struct ipc_namespace * ipc_ns, const topic_local_id_t publisher_id,
   const uint64_t msg_virtual_address, topic_local_id_t * subscriber_ids_out,
-  uint32_t subscriber_ids_buffer_size, union ioctl_publish_msg_args * ioctl_ret)
+  uint32_t subscriber_ids_buffer_size, union ioctl_publish_msg_args * ioctl_ret,
+  const pid_t caller_pid)
 {
   int ret = 0;
 
@@ -891,10 +957,11 @@ int hermos_ioctl_publish_msg(
 
   down_read(&global_htables_rwsem);
 
-  struct topic_wrapper * wrapper = find_topic_for_current(topic_name, ipc_ns);
-  if (!wrapper) {
-    dev_warn(hermos_device, "Topic (topic_name=%s) not found. (%s)\n", topic_name, __func__);
-    ret = -EINVAL;
+  struct topic_wrapper * wrapper;
+  ret = find_endpoint_topic(topic_name, ipc_ns, caller_pid, &wrapper);
+  if (ret) {
+    if (ret == -EINVAL)
+      dev_warn(hermos_device, "Topic (topic_name=%s) not found. (%s)\n", topic_name, __func__);
     goto unlock_only_global;
   }
 
@@ -906,6 +973,10 @@ int hermos_ioctl_publish_msg(
       hermos_device, "Publisher (id=%d) not found in the topic (topic_name=%s). (%s)\n",
       publisher_id, topic_name, __func__);
     ret = -EINVAL;
+    goto unlock_all;
+  }
+  if (pub_info->pid != caller_pid) {
+    ret = -EPERM;
     goto unlock_all;
   }
 
@@ -1051,16 +1122,17 @@ static int receive_msg_core(
 int hermos_ioctl_receive_msg(
   const char * topic_name, const struct ipc_namespace * ipc_ns,
   const topic_local_id_t subscriber_id, struct publisher_shm_info * pub_shm_infos,
-  uint32_t pub_shm_infos_size, union ioctl_receive_msg_args * ioctl_ret)
+  uint32_t pub_shm_infos_size, union ioctl_receive_msg_args * ioctl_ret, const pid_t caller_pid)
 {
   int ret = 0;
 
   down_read(&global_htables_rwsem);
 
-  struct topic_wrapper * wrapper = find_topic_for_current(topic_name, ipc_ns);
-  if (!wrapper) {
-    dev_warn(hermos_device, "Topic (topic_name=%s) not found. (%s)\n", topic_name, __func__);
-    ret = -EINVAL;
+  struct topic_wrapper * wrapper;
+  ret = find_endpoint_topic(topic_name, ipc_ns, caller_pid, &wrapper);
+  if (ret) {
+    if (ret == -EINVAL)
+      dev_warn(hermos_device, "Topic (topic_name=%s) not found. (%s)\n", topic_name, __func__);
     goto unlock_only_global;
   }
 
@@ -1075,6 +1147,10 @@ int hermos_ioctl_receive_msg(
       "(%s)\n",
       subscriber_id, topic_name, __func__);
     ret = -EINVAL;
+    goto unlock_all;
+  }
+  if (sub_info->pid != caller_pid) {
+    ret = -EPERM;
     goto unlock_all;
   }
 
@@ -1108,16 +1184,17 @@ int hermos_ioctl_take_msg(
   const char * topic_name, const struct ipc_namespace * ipc_ns,
   const topic_local_id_t subscriber_id, bool allow_same_message,
   struct publisher_shm_info * pub_shm_infos, uint32_t pub_shm_infos_size,
-  union ioctl_take_msg_args * ioctl_ret)
+  union ioctl_take_msg_args * ioctl_ret, const pid_t caller_pid)
 {
   int ret = 0;
 
   down_read(&global_htables_rwsem);
 
-  struct topic_wrapper * wrapper = find_topic_for_current(topic_name, ipc_ns);
-  if (!wrapper) {
-    dev_warn(hermos_device, "Topic (topic_name=%s) not found. (%s)\n", topic_name, __func__);
-    ret = -EINVAL;
+  struct topic_wrapper * wrapper;
+  ret = find_endpoint_topic(topic_name, ipc_ns, caller_pid, &wrapper);
+  if (ret) {
+    if (ret == -EINVAL)
+      dev_warn(hermos_device, "Topic (topic_name=%s) not found. (%s)\n", topic_name, __func__);
     goto unlock_only_global;
   }
 
@@ -1130,6 +1207,10 @@ int hermos_ioctl_take_msg(
       hermos_device, "Subscriber (id=%d) for the topic (topic_name=%s) not found. (%s)\n",
       subscriber_id, topic_name, __func__);
     ret = -EINVAL;
+    goto unlock_all;
+  }
+  if (sub_info->pid != caller_pid) {
+    ret = -EPERM;
     goto unlock_all;
   }
 
@@ -1419,7 +1500,8 @@ int hermos_ioctl_get_exit_process(
   int bkt;
   hash_for_each(proc_info_htable, bkt, proc_info, node)
   {
-    if (!ipc_eq(proc_info->ipc_ns, ipc_ns) || !proc_info->exited) {
+    if (!ipc_eq(proc_info->ipc_ns, ipc_ns) || !proc_info->exited ||
+        !uid_eq(proc_info->euid, current_euid())) {
       continue;
     }
 
@@ -1948,21 +2030,26 @@ unlock_only_global:
 }
 
 int hermos_ioctl_remove_subscriber(
-  const char * topic_name, const struct ipc_namespace * ipc_ns, topic_local_id_t subscriber_id)
+  const char * topic_name, const struct ipc_namespace * ipc_ns, topic_local_id_t subscriber_id,
+  const pid_t caller_pid)
 {
   int ret = 0;
 
   down_write(&global_htables_rwsem);
 
-  struct topic_wrapper * wrapper = find_topic_for_current(topic_name, ipc_ns);
-  if (!wrapper) {
-    ret = -EINVAL;
+  struct topic_wrapper * wrapper;
+  ret = find_endpoint_topic(topic_name, ipc_ns, caller_pid, &wrapper);
+  if (ret) {
     goto unlock;
   }
 
   struct subscriber_info * sub_info = find_subscriber_info(wrapper, subscriber_id);
   if (!sub_info) {
     ret = -ENODATA;
+    goto unlock;
+  }
+  if (sub_info->pid != caller_pid) {
+    ret = -EPERM;
     goto unlock;
   }
 
@@ -2031,21 +2118,26 @@ unlock:
 }
 
 int hermos_ioctl_remove_publisher(
-  const char * topic_name, const struct ipc_namespace * ipc_ns, topic_local_id_t publisher_id)
+  const char * topic_name, const struct ipc_namespace * ipc_ns, topic_local_id_t publisher_id,
+  const pid_t caller_pid)
 {
   int ret = 0;
 
   down_write(&global_htables_rwsem);
 
-  struct topic_wrapper * wrapper = find_topic_for_current(topic_name, ipc_ns);
-  if (!wrapper) {
-    ret = -EINVAL;
+  struct topic_wrapper * wrapper;
+  ret = find_endpoint_topic(topic_name, ipc_ns, caller_pid, &wrapper);
+  if (ret) {
     goto unlock;
   }
 
   struct publisher_info * pub_info = hermos_find_publisher_info(wrapper, publisher_id);
   if (!pub_info) {
     ret = -ENODATA;
+    goto unlock;
+  }
+  if (pub_info->pid != caller_pid) {
+    ret = -EPERM;
     goto unlock;
   }
 
@@ -2111,6 +2203,17 @@ int hermos_ioctl_add_bridge(
   int ret = 0;
 
   down_write(&global_htables_rwsem);
+
+  const struct process_info * proc_info = hermos_find_process_info(pid);
+  if (!proc_info || proc_info->exited || !ipc_eq(proc_info->ipc_ns, ipc_ns)) {
+    ret = -EINVAL;
+    goto unlock;
+  }
+
+  if (!uid_eq(proc_info->euid, current_euid())) {
+    ret = -EACCES;
+    goto unlock;
+  }
 
   struct bridge_info * existing = find_bridge_info(topic_name, ipc_ns);
 
@@ -2229,6 +2332,10 @@ int hermos_ioctl_add_domain_bridge(
   const char * name_b = from_is_a ? topic_name_to : topic_name_from;
 
   down_write(&global_htables_rwsem);
+  if (!namespace_accepts_euid(ipc_ns)) {
+    ret = -EACCES;
+    goto unlock;
+  }
 
   // Invariant: each cell (name, domain) belongs to at most one rule, and a rule pairs
   // exactly two cells. r_a == r_b (non-NULL) means an existing rule already pairs exactly
@@ -2464,6 +2571,10 @@ int hermos_ioctl_add_discovery_agent(
   // Deterministic default so the -ENOMEM path never returns a stale flag to userspace.
   ioctl_ret->ret_already_exists = false;
   down_write(&global_htables_rwsem);
+  if (!namespace_accepts_euid(ipc_ns)) {
+    ret = -EACCES;
+    goto unlock;
+  }
 
   if (hermos_find_discovery_agent(ipc_ns, domain_id)) {
     ioctl_ret->ret_already_exists = true;
@@ -2475,6 +2586,7 @@ int hermos_ioctl_add_discovery_agent(
     ret = -ENOMEM;
     goto unlock;
   }
+  agent->euid = current_euid();
   agent->pid = pid;
   agent->ipc_ns = ipc_ns;
   agent->domain_id = domain_id;
@@ -2506,6 +2618,10 @@ int hermos_ioctl_add_unlink_daemon(
   if (pid_ref == NULL) return -EINVAL;
 
   down_write(&global_htables_rwsem);
+  if (!namespace_accepts_euid(ipc_ns)) {
+    ret = -EACCES;
+    goto unlock;
+  }
   struct unlink_daemon_info * existing = hermos_find_unlink_daemon(ipc_ns);
   if (existing && hermos_unlink_daemon_is_alive(existing)) {
     ioctl_ret->ret_already_exists = true;
@@ -2518,6 +2634,7 @@ int hermos_ioctl_add_unlink_daemon(
     ret = -ENOMEM;
     goto unlock;
   }
+  daemon->euid = current_euid();
   daemon->global_pid = pid;
   daemon->pid_ref = get_pid(pid_ref);
   daemon->ipc_ns = ipc_ns;
@@ -2670,7 +2787,7 @@ static long release_sub_ref_cmd(struct ioctl_update_entry_args __user * arg)
   if (ret) return ret;
 
   ret = hermos_ioctl_release_message_entry_reference(
-    topic_name_buf, ipc_ns, entry_args.pubsub_id, entry_args.entry_id);
+    topic_name_buf, ipc_ns, entry_args.pubsub_id, entry_args.entry_id, current->tgid);
   return ret;
 }
 
@@ -2700,7 +2817,7 @@ static long receive_msg_cmd(union ioctl_receive_msg_args __user * arg)
 
   ret = hermos_ioctl_receive_msg(
     topic_name_buf, ipc_ns, receive_msg_args.subscriber_id, pub_shm_infos, pub_shm_info_size,
-    &receive_msg_args);
+    &receive_msg_args, current->tgid);
 
   if (ret == 0 && receive_msg_args.ret_pub_shm_num > 0) {
     if (copy_to_user(
@@ -2745,7 +2862,7 @@ static long publish_msg_cmd(union ioctl_publish_msg_args __user * arg)
 
   ret = hermos_ioctl_publish_msg(
     topic_name_buf, ipc_ns, publish_msg_args.publisher_id, publish_msg_args.msg_virtual_address,
-    subscriber_ids_buf, buffer_size, &publish_msg_args);
+    subscriber_ids_buf, buffer_size, &publish_msg_args, current->tgid);
 
   if (ret == 0) {
     // Copy subscriber IDs to user-space buffer
@@ -2793,7 +2910,7 @@ static long take_msg_cmd(union ioctl_take_msg_args __user * arg)
 
   ret = hermos_ioctl_take_msg(
     topic_name_buf, ipc_ns, take_args.subscriber_id, take_args.allow_same_message, pub_shm_infos,
-    pub_shm_info_size, &take_args);
+    pub_shm_info_size, &take_args, current->tgid);
 
   if (ret == 0 && take_args.ret_pub_shm_num > 0) {
     if (copy_to_user(
@@ -3054,7 +3171,8 @@ static long remove_subscriber_cmd(struct ioctl_remove_subscriber_args __user * a
   if (ret) return ret;
 
   ret =
-    hermos_ioctl_remove_subscriber(topic_name_buf, ipc_ns, remove_subscriber_args.subscriber_id);
+    hermos_ioctl_remove_subscriber(
+      topic_name_buf, ipc_ns, remove_subscriber_args.subscriber_id, current->tgid);
   return ret;
 }
 
@@ -3073,7 +3191,8 @@ static long remove_publisher_cmd(struct ioctl_remove_publisher_args __user * arg
     copy_name_from_user(topic_name_buf, sizeof(topic_name_buf), &remove_publisher_args.topic_name);
   if (ret) return ret;
 
-  ret = hermos_ioctl_remove_publisher(topic_name_buf, ipc_ns, remove_publisher_args.publisher_id);
+  ret = hermos_ioctl_remove_publisher(
+    topic_name_buf, ipc_ns, remove_publisher_args.publisher_id, current->tgid);
   return ret;
 }
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only OR BSD-2-Clause
 #include "hermos_kunit_do_exit.h"
 
-#include "../hermos.h"
+#include "../hermos_internal.h"
 #include "../hermos_memory_allocator.h"
 
 #include <kunit/test.h>
@@ -85,12 +85,13 @@ static topic_local_id_t setup_one_subscriber(struct kunit * test, const pid_t su
 }
 
 static uint64_t setup_one_entry(
-  struct kunit * test, const topic_local_id_t publisher_id, const uint64_t msg_virtual_address)
+  struct kunit * test, const topic_local_id_t publisher_id, const uint64_t msg_virtual_address,
+  const pid_t publisher_pid)
 {
   union ioctl_publish_msg_args publish_msg_args;
   int ret = hermos_ioctl_publish_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, publisher_id, msg_virtual_address, subscriber_ids_buf,
-    ARRAY_SIZE(subscriber_ids_buf), &publish_msg_args);
+    ARRAY_SIZE(subscriber_ids_buf), &publish_msg_args, publisher_pid);
 
   KUNIT_ASSERT_EQ(test, ret, 0);
   KUNIT_ASSERT_TRUE(
@@ -427,7 +428,7 @@ void test_case_do_exit_with_entry(struct kunit * test)
   const pid_t publisher_pid = PID_BASE;
   const uint64_t msg_virtual_address = setup_one_process(test, publisher_pid);
   const topic_local_id_t publisher_id = setup_one_publisher(test, publisher_pid);
-  setup_one_entry(test, publisher_id, msg_virtual_address);
+  setup_one_entry(test, publisher_id, msg_virtual_address, publisher_pid);
   union ioctl_get_publisher_num_args get_publisher_num_args;
   int ret =
     hermos_ioctl_get_publisher_num(TOPIC_NAME, current->nsproxy->ipc_ns, &get_publisher_num_args);
@@ -463,7 +464,7 @@ void test_case_do_exit_with_entry_with_subscriber_reference(struct kunit * test)
   const pid_t publisher_pid = PID_BASE;
   const uint64_t msg_virtual_address = setup_one_process(test, publisher_pid);
   const topic_local_id_t publisher_id = setup_one_publisher(test, publisher_pid);
-  const uint64_t entry_id = setup_one_entry(test, publisher_id, msg_virtual_address);
+  const uint64_t entry_id = setup_one_entry(test, publisher_id, msg_virtual_address, publisher_pid);
 
   const pid_t subscriber_pid = PID_BASE + 1;
   setup_one_process(test, subscriber_pid);
@@ -520,7 +521,7 @@ void test_case_do_exit_with_multi_references_publisher_exit_first(struct kunit *
   const pid_t publisher_pid = PID_BASE;
   const uint64_t msg_virtual_address = setup_one_process(test, publisher_pid);
   const topic_local_id_t publisher_id = setup_one_publisher(test, publisher_pid);
-  const uint64_t entry_id = setup_one_entry(test, publisher_id, msg_virtual_address);
+  const uint64_t entry_id = setup_one_entry(test, publisher_id, msg_virtual_address, publisher_pid);
 
   const pid_t subscriber_pid = PID_BASE + 1;
   setup_one_process(test, subscriber_pid);
@@ -602,7 +603,7 @@ void test_case_do_exit_with_multi_references_subscriber_exit_first(struct kunit 
   const pid_t publisher_pid = PID_BASE;
   const uint64_t msg_virtual_address = setup_one_process(test, publisher_pid);
   const topic_local_id_t publisher_id = setup_one_publisher(test, publisher_pid);
-  const uint64_t entry_id = setup_one_entry(test, publisher_id, msg_virtual_address);
+  const uint64_t entry_id = setup_one_entry(test, publisher_id, msg_virtual_address, publisher_pid);
 
   const pid_t subscriber_pid = PID_BASE + 1;
   setup_one_process(test, subscriber_pid);

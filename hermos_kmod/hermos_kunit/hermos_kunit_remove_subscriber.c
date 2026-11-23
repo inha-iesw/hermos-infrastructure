@@ -59,12 +59,13 @@ static topic_local_id_t setup_one_subscriber(struct kunit * test, const pid_t su
 }
 
 static uint64_t setup_one_entry(
-  struct kunit * test, const topic_local_id_t publisher_id, const uint64_t msg_virtual_address)
+  struct kunit * test, const topic_local_id_t publisher_id, const uint64_t msg_virtual_address,
+  const pid_t publisher_pid)
 {
   union ioctl_publish_msg_args publish_msg_args;
   int ret = hermos_ioctl_publish_msg(
     TOPIC_NAME, current->nsproxy->ipc_ns, publisher_id, msg_virtual_address, subscriber_ids_buf,
-    ARRAY_SIZE(subscriber_ids_buf), &publish_msg_args);
+    ARRAY_SIZE(subscriber_ids_buf), &publish_msg_args, publisher_pid);
 
   KUNIT_ASSERT_EQ(test, ret, 0);
   KUNIT_ASSERT_TRUE(
@@ -89,7 +90,8 @@ void test_case_remove_subscriber_basic(struct kunit * test)
   KUNIT_ASSERT_EQ(test, get_sub_args.ret_other_process_subscriber_num, 1);
 
   // Act
-  ret = hermos_ioctl_remove_subscriber(TOPIC_NAME, current->nsproxy->ipc_ns, subscriber_id);
+  ret = hermos_ioctl_remove_subscriber(
+    TOPIC_NAME, current->nsproxy->ipc_ns, subscriber_id, subscriber_pid);
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret, 0);
@@ -114,7 +116,7 @@ void test_case_remove_subscriber_keeps_topic_with_publisher(struct kunit * test)
   KUNIT_ASSERT_EQ(test, get_sub_args.ret_other_process_subscriber_num, 1);
 
   // Act
-  int ret = hermos_ioctl_remove_subscriber(TOPIC_NAME, current->nsproxy->ipc_ns, sub_id);
+  int ret = hermos_ioctl_remove_subscriber(TOPIC_NAME, current->nsproxy->ipc_ns, sub_id, pid);
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret, 0);
@@ -135,7 +137,7 @@ void test_case_remove_subscriber_clears_references(struct kunit * test)
   const uint64_t msg_addr = setup_one_process(test, pid);
   const topic_local_id_t pub_id = setup_one_publisher(test, pid);
   const topic_local_id_t sub_id = setup_one_subscriber(test, pid);
-  const uint64_t entry_id = setup_one_entry(test, pub_id, msg_addr);
+  const uint64_t entry_id = setup_one_entry(test, pub_id, msg_addr, pid);
 
   int ret =
     hermos_increment_message_entry_rc(TOPIC_NAME, current->nsproxy->ipc_ns, sub_id, entry_id);
@@ -145,7 +147,7 @@ void test_case_remove_subscriber_clears_references(struct kunit * test)
     test, hermos_get_entry_rc(TOPIC_NAME, current->nsproxy->ipc_ns, entry_id, sub_id), 1);
 
   // Act
-  ret = hermos_ioctl_remove_subscriber(TOPIC_NAME, current->nsproxy->ipc_ns, sub_id);
+  ret = hermos_ioctl_remove_subscriber(TOPIC_NAME, current->nsproxy->ipc_ns, sub_id, pid);
   KUNIT_ASSERT_EQ(test, ret, 0);
 
   // Assert
@@ -167,7 +169,7 @@ void test_case_remove_subscriber_triggers_gc(struct kunit * test)
 
   const topic_local_id_t pub_id = setup_one_publisher(test, pub_pid);
   const topic_local_id_t sub_id = setup_one_subscriber(test, sub_pid);
-  const uint64_t entry_id = setup_one_entry(test, pub_id, msg_addr);
+  const uint64_t entry_id = setup_one_entry(test, pub_id, msg_addr, pub_pid);
 
   int ret =
     hermos_increment_message_entry_rc(TOPIC_NAME, current->nsproxy->ipc_ns, sub_id, entry_id);
@@ -181,7 +183,7 @@ void test_case_remove_subscriber_triggers_gc(struct kunit * test)
     test, hermos_is_in_topic_entries(TOPIC_NAME, current->nsproxy->ipc_ns, entry_id));
 
   // Act
-  ret = hermos_ioctl_remove_subscriber(TOPIC_NAME, current->nsproxy->ipc_ns, sub_id);
+  ret = hermos_ioctl_remove_subscriber(TOPIC_NAME, current->nsproxy->ipc_ns, sub_id, sub_pid);
   KUNIT_ASSERT_EQ(test, ret, 0);
 
   // Assert
@@ -203,7 +205,7 @@ void test_case_remove_subscriber_shared_ref_gc(struct kunit * test)
   const topic_local_id_t pub_id = setup_one_publisher(test, pub_pid);
   const topic_local_id_t sub1_id = setup_one_subscriber(test, sub1_pid);
   const topic_local_id_t sub2_id = setup_one_subscriber(test, sub2_pid);
-  const uint64_t entry_id = setup_one_entry(test, pub_id, msg_addr);
+  const uint64_t entry_id = setup_one_entry(test, pub_id, msg_addr, pub_pid);
 
   hermos_increment_message_entry_rc(TOPIC_NAME, current->nsproxy->ipc_ns, sub1_id, entry_id);
   hermos_increment_message_entry_rc(TOPIC_NAME, current->nsproxy->ipc_ns, sub2_id, entry_id);
@@ -212,11 +214,21 @@ void test_case_remove_subscriber_shared_ref_gc(struct kunit * test)
   msleep(10);
 
   // Act
-  hermos_ioctl_remove_subscriber(TOPIC_NAME, current->nsproxy->ipc_ns, sub1_id);
+  hermos_ioctl_remove_subscriber(TOPIC_NAME, current->nsproxy->ipc_ns, sub1_id, sub1_pid);
   // Assert
   KUNIT_EXPECT_TRUE(
     test, hermos_is_in_topic_entries(TOPIC_NAME, current->nsproxy->ipc_ns, entry_id));
-  hermos_ioctl_remove_subscriber(TOPIC_NAME, current->nsproxy->ipc_ns, sub2_id);
+  hermos_ioctl_remove_subscriber(TOPIC_NAME, current->nsproxy->ipc_ns, sub2_id, sub2_pid);
   KUNIT_EXPECT_FALSE(
     test, hermos_is_in_topic_entries(TOPIC_NAME, current->nsproxy->ipc_ns, entry_id));
+}
+
+void test_case_remove_subscriber_wrong_owner(struct kunit * test)
+{
+  setup_one_process(test, PID_BASE);
+  const topic_local_id_t id = setup_one_subscriber(test, PID_BASE);
+  KUNIT_EXPECT_EQ(test, hermos_ioctl_remove_subscriber(
+    TOPIC_NAME, current->nsproxy->ipc_ns, id, PID_BASE + 1), -EPERM);
+  KUNIT_EXPECT_TRUE(test, hermos_is_in_subscriber_htable(
+    TOPIC_NAME, current->nsproxy->ipc_ns, id));
 }

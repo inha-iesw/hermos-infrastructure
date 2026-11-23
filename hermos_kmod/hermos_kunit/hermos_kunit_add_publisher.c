@@ -14,6 +14,10 @@ static const bool is_bridge = false;
 
 void test_case_add_publisher_normal(struct kunit * test)
 {
+  union ioctl_add_process_args process_args;
+  KUNIT_ASSERT_EQ(test, hermos_ioctl_add_process(
+    publisher_pid, current->nsproxy->ipc_ns, false, 0, &process_args), 0);
+
   union ioctl_get_publisher_num_args get_publisher_num_args;
   int ret =
     hermos_ioctl_get_publisher_num(topic_name, current->nsproxy->ipc_ns, &get_publisher_num_args);
@@ -41,6 +45,10 @@ void test_case_add_publisher_normal(struct kunit * test)
 
 void test_case_add_publisher_many(struct kunit * test)
 {
+  union ioctl_add_process_args process_args;
+  KUNIT_ASSERT_EQ(test, hermos_ioctl_add_process(
+    publisher_pid, current->nsproxy->ipc_ns, false, 0, &process_args), 0);
+
   union ioctl_get_publisher_num_args get_publisher_num_args;
   int ret =
     hermos_ioctl_get_publisher_num(topic_name, current->nsproxy->ipc_ns, &get_publisher_num_args);
@@ -69,6 +77,10 @@ void test_case_add_publisher_many(struct kunit * test)
 
 void test_case_add_publisher_too_many(struct kunit * test)
 {
+  union ioctl_add_process_args process_args;
+  KUNIT_ASSERT_EQ(test, hermos_ioctl_add_process(
+    publisher_pid, current->nsproxy->ipc_ns, false, 0, &process_args), 0);
+
   union ioctl_get_publisher_num_args get_publisher_num_args;
   int ret =
     hermos_ioctl_get_publisher_num(topic_name, current->nsproxy->ipc_ns, &get_publisher_num_args);
@@ -93,3 +105,41 @@ void test_case_add_publisher_too_many(struct kunit * test)
   KUNIT_EXPECT_EQ(test, hermos_get_topic_num(current->nsproxy->ipc_ns), 1);
   KUNIT_EXPECT_TRUE(test, hermos_is_in_topic_htable(topic_name, current->nsproxy->ipc_ns));
 }
+
+void test_case_add_publisher_requires_registration(struct kunit * test)
+{
+  union ioctl_add_publisher_args result = {};
+  KUNIT_EXPECT_EQ(test, hermos_ioctl_add_publisher(
+    topic_name, current->nsproxy->ipc_ns, node_name, publisher_pid, 1, false, false, &result),
+    -EINVAL);
+  KUNIT_EXPECT_EQ(test, hermos_get_topic_num(current->nsproxy->ipc_ns), 0);
+}
+
+void test_case_add_publisher_rejects_exited_process(struct kunit * test)
+{
+  union ioctl_add_process_args process = {};
+  KUNIT_ASSERT_EQ(test, hermos_ioctl_add_process(
+    publisher_pid, current->nsproxy->ipc_ns, false, 0, &process), 0);
+  hermos_process_exit_cleanup(publisher_pid);
+  KUNIT_ASSERT_TRUE(test, hermos_is_proc_exited(publisher_pid));
+  union ioctl_add_publisher_args result = {};
+  KUNIT_EXPECT_EQ(test, hermos_ioctl_add_publisher(
+    topic_name, current->nsproxy->ipc_ns, node_name, publisher_pid, 1, false, false, &result),
+    -EINVAL);
+  KUNIT_EXPECT_EQ(test, hermos_get_topic_num(current->nsproxy->ipc_ns), 0);
+}
+
+void test_case_add_publisher_rejects_namespace_mismatch(struct kunit * test)
+{
+  struct ipc_namespace * other_ns = kunit_kzalloc(test, sizeof(*other_ns), GFP_KERNEL);
+  KUNIT_ASSERT_NOT_NULL(test, other_ns);
+  union ioctl_add_process_args process = {};
+  KUNIT_ASSERT_EQ(test, hermos_ioctl_add_process(
+    publisher_pid, current->nsproxy->ipc_ns, false, 0, &process), 0);
+  union ioctl_add_publisher_args result = {};
+  KUNIT_EXPECT_EQ(test, hermos_ioctl_add_publisher(
+    topic_name, other_ns, node_name, publisher_pid, 1, false, false, &result), -EINVAL);
+  KUNIT_EXPECT_EQ(test, hermos_get_topic_num(other_ns), 0);
+  KUNIT_EXPECT_EQ(test, hermos_get_topic_num(current->nsproxy->ipc_ns), 0);
+}
+
