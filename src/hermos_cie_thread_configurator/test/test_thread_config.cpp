@@ -1,4 +1,9 @@
 #include "hermos_cie_thread_configurator/thread_config.hpp"
+#include "hermos_cie_thread_configurator/cie_thread_configurator.hpp"
+#include "rcl/domain_id.h"
+#include "rcl/error_handling.h"
+#include <cstdlib>
+#include <optional>
 
 #include <gtest/gtest.h>
 #include <yaml-cpp/yaml.h>
@@ -411,3 +416,26 @@ TEST(ExtractNodePart, SplitsAtFirstAtSign)
   EXPECT_EQ(acie::extract_node_part("@Timer(1)"), "");
   EXPECT_EQ(acie::extract_node_part(""), "");
 }
+
+TEST(DefaultDomainId, MatchesRclEnvironmentInterpretation)
+{
+  const char * previous = std::getenv("ROS_DOMAIN_ID");
+  const std::optional<std::string> saved = previous ? std::optional<std::string>(previous) : std::nullopt;
+  for (const char * value : {"", "12", "0x10", "010", "invalid", "-1", "12junk"}) {
+    setenv("ROS_DOMAIN_ID", value, 1);
+    size_t expected = 0;
+    const auto status = rcl_get_default_domain_id(&expected);
+    rcl_reset_error();
+    if (status == RCL_RET_OK) {
+      EXPECT_EQ(acie::get_default_domain_id(), expected) << value;
+    } else {
+      EXPECT_THROW(acie::get_default_domain_id(), std::exception) << value;
+    }
+  }
+  if (saved) {
+    setenv("ROS_DOMAIN_ID", saved->c_str(), 1);
+  } else {
+    unsetenv("ROS_DOMAIN_ID");
+  }
+}
+

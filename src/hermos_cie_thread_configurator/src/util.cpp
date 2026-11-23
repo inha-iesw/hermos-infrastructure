@@ -1,5 +1,6 @@
 #include "hermos_cie_thread_configurator/cie_thread_configurator.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "rcl/domain_id.h"
 
 #include <array>
 #include <chrono>
@@ -83,11 +84,12 @@ std::map<std::string, std::string> get_hardware_info()
 
 size_t get_default_domain_id()
 {
-  const char * env_value = std::getenv("ROS_DOMAIN_ID");
-  if (env_value != nullptr) {
-    return static_cast<size_t>(std::stoul(env_value));
+  size_t domain_id = 0;
+  const auto status = rcl_get_default_domain_id(&domain_id);
+  if (status != RCL_RET_OK) {
+    rclcpp::exceptions::throw_from_rcl_error(status, "Invalid ROS_DOMAIN_ID");
   }
-  return 0;  // default domain ID
+  return domain_id;
 }
 
 rclcpp::Node::SharedPtr create_node_for_domain(size_t domain_id)
