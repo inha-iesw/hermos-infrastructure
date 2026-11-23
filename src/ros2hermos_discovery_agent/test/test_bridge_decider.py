@@ -267,3 +267,12 @@ def test_decide_keeps_local_type_when_remote_type_conflicts():
     assert reqs[0].type_name == 'std_msgs/msg/Int32'
 
 
+def test_dispatch_reports_nontransient_error_with_rclpy_logger(monkeypatch):
+    from rclpy.logging import get_logger
+    from ros2hermos_discovery_agent import bridge_decider
+
+    monkeypatch.setattr(bridge_decider, 'send_request',
+                        lambda *_: 'sendto(test): Operation not permitted')
+    request = BridgeRequest('/x', 'std_msgs/msg/Int32', DIRECTION_ROS2_TO_HERMOS,
+                            3, False, True)
+    dispatch_requests([request], 111, logger=get_logger('dispatch_test'))
