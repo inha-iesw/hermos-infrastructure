@@ -2,6 +2,13 @@
 #include "hermos_internal.h"
 #include "observation/endpoint_stats.h"
 
+#include <linux/random.h>
+
+// Protected by global_htables_rwsem, like topic creation. The nonce separates module instances;
+// the sequence is never reset during topic cleanup, so delayed exit records cannot name a new MQ.
+static u64 notify_mq_nonce[2];
+static u64 notify_mq_sequence;
+
 #ifndef KUNIT_BUILD
 // Kernel module uses global PIDs, whereas user-space and the interface between them use local PIDs.
 // Thus, PIDs must be converted from global to local before they are passed from kernel to user.
@@ -164,6 +171,11 @@ static int add_topic(
     (*wrapper)->topic = grouped;
     grouped->wrapper_refcnt++;
   } else {
+    if (notify_mq_sequence == U64_MAX) {
+      kfree((*wrapper)->key);
+      kfree(*wrapper);
+      return -EOVERFLOW;
+    }
     (*wrapper)->topic = kmalloc(sizeof(struct topic_struct), GFP_KERNEL);
     if (!(*wrapper)->topic) {
       dev_warn(
@@ -174,6 +186,11 @@ static int add_topic(
       kfree(*wrapper);
       return -ENOMEM;
     }
+    if (notify_mq_sequence == 0) get_random_bytes(notify_mq_nonce, sizeof(notify_mq_nonce));
+    snprintf(
+      (*wrapper)->topic->notify_mq_name, sizeof((*wrapper)->topic->notify_mq_name),
+      "/%016llx%016llx-%016llx", (unsigned long long)notify_mq_nonce[0],
+      (unsigned long long)notify_mq_nonce[1], (unsigned long long)++notify_mq_sequence);
     init_rwsem(&(*wrapper)->topic->rwsem);
     (*wrapper)->topic->entries = RB_ROOT;
     hash_init((*wrapper)->topic->pub_info_htable);

@@ -87,9 +87,7 @@ class PublisherBase
 protected:
   topic_local_id_t id_ = -1;
   std::string topic_name_;
-  // Topic name for the publish-notification MQ (returned by the kmod). Differs from topic_name_
-  // only for a domain-bridged/renamed topic, where it is the pair's canonical name so a publisher
-  // and a renamed subscriber derive the same MQ name.
+  // Kernel-issued topic-generation token shared with subscribers when MQ fallback is used.
   std::string mq_topic_name_;
   std::unordered_map<topic_local_id_t, std::tuple<mqd_t, bool>> opened_mqs_;
   std::mutex opened_mqs_mtx_;

@@ -25,12 +25,9 @@ int has_new_pid;
 
 struct tracepoint * tp_sched_process_exit;
 
-// The topic name a topic's endpoints notify on. Endpoints of a bridged (incl. renamed) topic share
-// one topic_struct but keep their own per-domain names, so return the rule's canonical name -- a
-// publisher and a renamed subscriber then derive the same publish-notification MQ name.
 const char * hermos_notify_mq_topic_name(const struct topic_wrapper * wrapper)
 {
-  return wrapper->topic->rule ? wrapper->topic->rule->topic_name_a : wrapper->key;
+  return wrapper->topic->notify_mq_name;
 }
 
 static void pre_handler_subscriber_exit(

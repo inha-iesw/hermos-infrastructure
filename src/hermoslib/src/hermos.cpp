@@ -385,6 +385,7 @@ bool is_version_consistent(
     return false;
   }
 
+  // Registration checks the notification ABI separately because multiple 2.3.5 builds exist.
   if (!compare_to_minor_version(&lib_ver, &kmod_ver)) {
     RCLCPP_ERROR(
       logger,

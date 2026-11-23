@@ -5,6 +5,7 @@
 #include "../hermos_memory_allocator.h"
 
 #include <kunit/test.h>
+#include <linux/string.h>
 
 static const char * TOPIC_NAME = "/kunit_test_topic";
 static const char * NODE_NAME = "/kunit_test_node";
@@ -57,6 +58,29 @@ void test_case_add_subscriber_domain_isolation(struct kunit * test)
 
   // Two wrappers: (TOPIC_NAME, ipc_ns, domain=0) and (TOPIC_NAME, ipc_ns, domain=1).
   KUNIT_EXPECT_EQ(test, hermos_get_topic_num(current->nsproxy->ipc_ns), 2);
+}
+
+void test_case_add_subscriber_domain_mq_tokens_differ(struct kunit * test)
+{
+  const pid_t subscriber_pids[] = {2000, 2001};
+  union ioctl_add_subscriber_args args[2];
+
+  for (uint32_t domain = 0; domain < ARRAY_SIZE(subscriber_pids); domain++) {
+    setup_process_domain(test, subscriber_pids[domain], domain);
+    KUNIT_ASSERT_EQ(
+      test,
+      hermos_ioctl_add_subscriber(
+        TOPIC_NAME, current->nsproxy->ipc_ns, NODE_NAME, subscriber_pids[domain], 1,
+        QOS_IS_TRANSIENT_LOCAL, QOS_IS_RELIABLE, IS_TAKE_SUB, IGNORE_LOCAL_PUBLICATIONS,
+        IS_BRIDGE, &args[domain]),
+      0);
+  }
+
+  // Local IDs may match across isolated domains; their MQ tokens must not.
+  KUNIT_ASSERT_EQ(test, args[0].ret_id, args[1].ret_id);
+  KUNIT_EXPECT_EQ(test, args[0].ret_mq_topic_name[0], '/');
+  KUNIT_EXPECT_EQ(test, args[1].ret_mq_topic_name[0], '/');
+  KUNIT_EXPECT_NE(test, strcmp(args[0].ret_mq_topic_name, args[1].ret_mq_topic_name), 0);
 }
 
 // A publisher and subscriber in the same domain on the same topic share one

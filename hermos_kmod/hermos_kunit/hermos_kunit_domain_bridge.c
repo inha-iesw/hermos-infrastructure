@@ -424,12 +424,9 @@ void test_case_domain_bridge_rename_multi_publisher(struct kunit * test)
   KUNIT_EXPECT_EQ(test, subscriber_ids_buf[0], sub_d2);
 }
 
-void test_case_domain_bridge_rename_notify_uses_canonical_name(struct kunit * test)
+void test_case_domain_bridge_rename_notify_uses_shared_token(struct kunit * test)
 {
-  // Both endpoints of a renamed pair must derive the same publish-notification MQ name -- the
-  // pair's canonical (domain_a) name -- even though they publish/subscribe under different
-  // per-domain names. Otherwise the userspace publisher and the renamed subscriber open different
-  // MQs and the subscriber is never notified.
+  // Renamed endpoints must derive the same notification MQ despite their different topic names.
   KUNIT_ASSERT_EQ(
     test, hermos_ioctl_add_domain_bridge(RN_SRC, RN_DST, 1, 2, current->nsproxy->ipc_ns), 0);
 
@@ -450,16 +447,57 @@ void test_case_domain_bridge_rename_notify_uses_canonical_name(struct kunit * te
       &sub_args),
     0);
 
-  // domain_a is the lower domain (1), so the canonical name is RN_SRC: the publisher on RN_SRC@1
-  // and the renamed subscriber on RN_DST@2 both report RN_SRC as their notification MQ topic.
-  KUNIT_EXPECT_STREQ(test, pub_args.ret_mq_topic_name, RN_SRC);
-  KUNIT_EXPECT_STREQ(test, sub_args.ret_mq_topic_name, RN_SRC);
+  KUNIT_EXPECT_EQ(test, pub_args.ret_mq_topic_name[0], '/');
+  KUNIT_EXPECT_STREQ(test, sub_args.ret_mq_topic_name, pub_args.ret_mq_topic_name);
 }
 
-// A renamed subscriber opens its notification MQ under the canonical (domain_a) name, so the
-// exit-cleanup record the daemon later unlinks must carry that same canonical name -- not the
-// subscriber's own per-domain name -- otherwise a crashed renamed subscriber's MQ leaks.
-void test_case_domain_bridge_rename_exit_cleanup_uses_canonical_name(struct kunit * test)
+void test_case_domain_bridge_rename_notify_token_survives_wrapper_recreation(struct kunit * test)
+{
+  KUNIT_ASSERT_EQ(
+    test, hermos_ioctl_add_domain_bridge(RN_DST, RN_SRC, 2, 1, current->nsproxy->ipc_ns), 0);
+
+  // Create the higher domain first, so identity cannot depend on wrapper creation order.
+  setup_process_in_domain(test, 1001, 2);
+  union ioctl_add_subscriber_args sub_args;
+  KUNIT_ASSERT_EQ(
+    test,
+    hermos_ioctl_add_subscriber(
+      RN_DST, current->nsproxy->ipc_ns, "/kunit_node", 1001, 1, false, true, false, false, false,
+      &sub_args),
+    0);
+
+  setup_process_in_domain(test, current->tgid, 1);
+  union ioctl_add_publisher_args pub_args;
+  KUNIT_ASSERT_EQ(
+    test,
+    hermos_ioctl_add_publisher(
+      RN_SRC, current->nsproxy->ipc_ns, "/kunit_node", current->tgid, 1, false, false, &pub_args),
+    0);
+  KUNIT_EXPECT_STREQ(test, pub_args.ret_mq_topic_name, sub_args.ret_mq_topic_name);
+
+  KUNIT_ASSERT_EQ(
+    test,
+    hermos_ioctl_remove_publisher(RN_SRC, current->nsproxy->ipc_ns, pub_args.ret_id, current->tgid),
+    0);
+  KUNIT_ASSERT_EQ(test, hermos_topic_wrapper_refcnt(RN_SRC, current->nsproxy->ipc_ns, 1), 0);
+  KUNIT_ASSERT_EQ(test, hermos_topic_wrapper_refcnt(RN_DST, current->nsproxy->ipc_ns, 2), 1);
+
+  // Adding the reverse delivery direction must not change the surviving subscriber's MQ.
+  KUNIT_ASSERT_EQ(
+    test, hermos_ioctl_add_domain_bridge(RN_SRC, RN_DST, 1, 2, current->nsproxy->ipc_ns), 0);
+  union ioctl_add_publisher_args recreated_pub_args;
+  KUNIT_ASSERT_EQ(
+    test,
+    hermos_ioctl_add_publisher(
+      RN_SRC, current->nsproxy->ipc_ns, "/kunit_node", current->tgid, 1, false, false,
+      &recreated_pub_args),
+    0);
+  KUNIT_EXPECT_STREQ(test, recreated_pub_args.ret_mq_topic_name, sub_args.ret_mq_topic_name);
+  KUNIT_EXPECT_EQ(test, hermos_topic_wrapper_refcnt(RN_DST, current->nsproxy->ipc_ns, 2), 2);
+}
+
+// Exit cleanup must use the token returned when the renamed subscriber opened its MQ.
+void test_case_domain_bridge_rename_exit_cleanup_uses_shared_token(struct kunit * test)
 {
   KUNIT_ASSERT_EQ(
     test, hermos_ioctl_add_domain_bridge(RN_SRC, RN_DST, 1, 2, current->nsproxy->ipc_ns), 0);
@@ -469,10 +507,15 @@ void test_case_domain_bridge_rename_exit_cleanup_uses_canonical_name(struct kuni
 
   const pid_t subscriber_pid = 1001;
   setup_process_in_domain(test, subscriber_pid, 2);
-  const topic_local_id_t sub_id = add_subscriber_named(test, subscriber_pid, RN_DST);
+  union ioctl_add_subscriber_args sub_args;
+  KUNIT_ASSERT_EQ(
+    test,
+    hermos_ioctl_add_subscriber(
+      RN_DST, current->nsproxy->ipc_ns, "/kunit_node", subscriber_pid, 1, false, true, false,
+      false, false, &sub_args),
+    0);
 
-  hermos_enqueue_exit_pid(subscriber_pid);
-  msleep(20);  // let exit_worker_thread record the subscription MQ
+  hermos_process_exit_cleanup(subscriber_pid);
 
   struct ioctl_get_exit_process_args get_exit_args;
   const uint32_t buf_size = 4;
@@ -490,10 +533,8 @@ void test_case_domain_bridge_rename_exit_cleanup_uses_canonical_name(struct kuni
 
   KUNIT_EXPECT_EQ(test, get_exit_args.ret_pid, subscriber_pid);
   KUNIT_EXPECT_EQ(test, (int)get_exit_args.ret_subscription_mq_info_num, 1);
-  // domain_a is the lower domain (1), so the daemon must unlink the MQ under the canonical name
-  // RN_SRC -- the name the renamed subscriber opened it under -- not its own name RN_DST.
-  KUNIT_EXPECT_STREQ(test, mq_info_buf[0].topic_name, RN_SRC);
-  KUNIT_EXPECT_EQ(test, mq_info_buf[0].subscriber_id, sub_id);
+  KUNIT_EXPECT_STREQ(test, mq_info_buf[0].topic_name, sub_args.ret_mq_topic_name);
+  KUNIT_EXPECT_EQ(test, mq_info_buf[0].subscriber_id, sub_args.ret_id);
 
   bool daemon_should_exit = false;
   hermos_commit_exit_process(

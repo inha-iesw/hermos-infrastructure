@@ -62,7 +62,7 @@ static topic_local_id_t setup_one_publisher(struct kunit * test, const pid_t pub
 }
 
 static topic_local_id_t setup_one_subscriber_on_topic(
-  struct kunit * test, const pid_t subscriber_pid, const char * topic_name)
+  struct kunit * test, const pid_t subscriber_pid, const char * topic_name, char * mq_topic_name)
 {
   union ioctl_add_subscriber_args add_subscriber_args;
   int ret = hermos_ioctl_add_subscriber(
@@ -76,12 +76,15 @@ static topic_local_id_t setup_one_subscriber_on_topic(
     test, hermos_is_in_subscriber_htable(
             topic_name, current->nsproxy->ipc_ns, add_subscriber_args.ret_id));
 
+  if (mq_topic_name) {
+    strscpy(mq_topic_name, add_subscriber_args.ret_mq_topic_name, TOPIC_NAME_BUFFER_SIZE);
+  }
   return add_subscriber_args.ret_id;
 }
 
 static topic_local_id_t setup_one_subscriber(struct kunit * test, const pid_t subscriber_pid)
 {
-  return setup_one_subscriber_on_topic(test, subscriber_pid, TOPIC_NAME);
+  return setup_one_subscriber_on_topic(test, subscriber_pid, TOPIC_NAME, NULL);
 }
 
 static uint64_t setup_one_entry(
@@ -682,7 +685,10 @@ void test_case_do_exit_subscription_mq_info(struct kunit * test)
   // Arrange: one process with one subscriber
   const pid_t subscriber_pid = PID_BASE;
   setup_one_process(test, subscriber_pid);
-  topic_local_id_t sub_id = setup_one_subscriber(test, subscriber_pid);
+  char mq_topic_name[TOPIC_NAME_BUFFER_SIZE];
+  topic_local_id_t sub_id =
+    setup_one_subscriber_on_topic(test, subscriber_pid, TOPIC_NAME, mq_topic_name);
+
 
   // Act: simulate process exit
   hermos_enqueue_exit_pid(subscriber_pid);
@@ -703,7 +709,7 @@ void test_case_do_exit_subscription_mq_info(struct kunit * test)
   KUNIT_EXPECT_EQ(test, ret, 0);
   KUNIT_EXPECT_EQ(test, get_exit_args.ret_pid, subscriber_pid);
   KUNIT_EXPECT_EQ(test, (int)get_exit_args.ret_subscription_mq_info_num, 1);
-  KUNIT_EXPECT_STREQ(test, mq_info_buf[0].topic_name, TOPIC_NAME);
+  KUNIT_EXPECT_STREQ(test, mq_info_buf[0].topic_name, mq_topic_name);
   KUNIT_EXPECT_EQ(test, mq_info_buf[0].subscriber_id, sub_id);
 
   bool daemon_should_exit = false;
@@ -722,8 +728,13 @@ void test_case_do_exit_subscription_mq_info_multi_topic(struct kunit * test)
   static const char * TOPIC_NAME_2 = "/kunit_test_topic_2";
   const pid_t subscriber_pid = PID_BASE;
   setup_one_process(test, subscriber_pid);
-  topic_local_id_t sub_id_1 = setup_one_subscriber_on_topic(test, subscriber_pid, TOPIC_NAME);
-  topic_local_id_t sub_id_2 = setup_one_subscriber_on_topic(test, subscriber_pid, TOPIC_NAME_2);
+  char mq_topic_name_1[TOPIC_NAME_BUFFER_SIZE];
+  char mq_topic_name_2[TOPIC_NAME_BUFFER_SIZE];
+  topic_local_id_t sub_id_1 =
+    setup_one_subscriber_on_topic(test, subscriber_pid, TOPIC_NAME, mq_topic_name_1);
+  topic_local_id_t sub_id_2 =
+    setup_one_subscriber_on_topic(test, subscriber_pid, TOPIC_NAME_2, mq_topic_name_2);
+  KUNIT_EXPECT_NE(test, strcmp(mq_topic_name_1, mq_topic_name_2), 0);
 
   // Act: simulate process exit
   hermos_enqueue_exit_pid(subscriber_pid);
@@ -750,12 +761,12 @@ void test_case_do_exit_subscription_mq_info_multi_topic(struct kunit * test)
   bool found_topic_2 = false;
   for (uint32_t i = 0; i < get_exit_args.ret_subscription_mq_info_num; i++) {
     if (
-      strcmp(mq_info_buf[i].topic_name, TOPIC_NAME) == 0 &&
+      strcmp(mq_info_buf[i].topic_name, mq_topic_name_1) == 0 &&
       mq_info_buf[i].subscriber_id == sub_id_1) {
       found_topic_1 = true;
     }
     if (
-      strcmp(mq_info_buf[i].topic_name, TOPIC_NAME_2) == 0 &&
+      strcmp(mq_info_buf[i].topic_name, mq_topic_name_2) == 0 &&
       mq_info_buf[i].subscriber_id == sub_id_2) {
       found_topic_2 = true;
     }
@@ -770,4 +781,47 @@ void test_case_do_exit_subscription_mq_info_multi_topic(struct kunit * test)
   KUNIT_EXPECT_TRUE(test, daemon_should_exit);
 
   kvfree(mq_info_buf);
+}
+
+void test_case_do_exit_mq_record_preserves_old_topic_token(struct kunit * test)
+{
+  const pid_t old_pid = PID_BASE;
+  const pid_t new_pid = PID_BASE + 1;
+  char old_mq_topic_name[TOPIC_NAME_BUFFER_SIZE];
+  char new_mq_topic_name[TOPIC_NAME_BUFFER_SIZE];
+
+  setup_one_process(test, old_pid);
+  const topic_local_id_t old_id =
+    setup_one_subscriber_on_topic(test, old_pid, TOPIC_NAME, old_mq_topic_name);
+  hermos_process_exit_cleanup(old_pid);
+  KUNIT_ASSERT_EQ(test, hermos_get_topic_num(current->nsproxy->ipc_ns), 0);
+
+  // Recreate the same topic before the daemon consumes the previous generation's exit record.
+  setup_one_process(test, new_pid);
+  const topic_local_id_t new_id =
+    setup_one_subscriber_on_topic(test, new_pid, TOPIC_NAME, new_mq_topic_name);
+  KUNIT_ASSERT_EQ(test, new_id, old_id);
+  KUNIT_EXPECT_NE(test, strcmp(new_mq_topic_name, old_mq_topic_name), 0);
+
+  struct ioctl_get_exit_process_args get_exit_args = {};
+  struct exit_subscription_mq_info mq_info = {};
+  pid_t global_pid = -1;
+  KUNIT_ASSERT_EQ(
+    test,
+    hermos_ioctl_get_exit_process(
+      current->nsproxy->ipc_ns, &get_exit_args, &mq_info, 1, &global_pid),
+    0);
+  KUNIT_ASSERT_EQ(test, get_exit_args.ret_pid, old_pid);
+  KUNIT_ASSERT_EQ(test, get_exit_args.ret_subscription_mq_info_num, (uint32_t)1);
+  KUNIT_EXPECT_STREQ(test, mq_info.topic_name, old_mq_topic_name);
+  KUNIT_EXPECT_NE(test, strcmp(mq_info.topic_name, new_mq_topic_name), 0);
+  KUNIT_EXPECT_EQ(test, mq_info.subscriber_id, old_id);
+
+  bool daemon_should_exit = false;
+  hermos_commit_exit_process(
+    current->nsproxy->ipc_ns, global_pid, get_exit_args.ret_subscription_mq_info_num,
+    &daemon_should_exit);
+  KUNIT_EXPECT_FALSE(test, daemon_should_exit);
+  KUNIT_EXPECT_TRUE(
+    test, hermos_is_in_subscriber_htable(TOPIC_NAME, current->nsproxy->ipc_ns, new_id));
 }

@@ -147,6 +147,9 @@ struct domain_bridge_rule;
 
 struct topic_struct
 {
+  // Opaque MQ identity: slash + 128-bit module nonce + separator + 64-bit generation + NUL.
+  // Shared wrappers retain it; a new topic generation never reuses it within this module instance.
+  char notify_mq_name[51];
   struct rb_root entries;
   DECLARE_HASHTABLE(pub_info_htable, PUB_INFO_HASH_BITS);
   DECLARE_HASHTABLE(sub_info_htable, SUB_INFO_HASH_BITS);
@@ -262,8 +265,8 @@ bool hermos_wrapper_has_domain_endpoints(const struct topic_wrapper * wrapper);
 
 bool hermos_is_referenced(struct entry_node * en);
 
-// The canonical topic name whose publish-notification MQ this wrapper's endpoints use. Shared
-// between registration (returned to userspace) and exit cleanup so both derive the same MQ name.
+// The opaque notification token shared by this topic's endpoints, including renamed bridge peers.
+// Registration and exit cleanup use it unchanged; it is independent of the logical topic name.
 const char * hermos_notify_mq_topic_name(const struct topic_wrapper * wrapper);
 
 struct process_info * hermos_find_process_info(const pid_t pid);
