@@ -171,9 +171,13 @@ bash scripts/test/test_and_create_report.bash
 KUnit 테스트를 실행하고 커버리지 보고서를 생성하려면 다음 설정을 활성화한 사용자 지정 커널이 필요합니다. [예제 커널](https://drive.google.com/drive/folders/1sd8ROusgxhnEDOO0hbze3F5y47qtIdcM?usp=drive_link)도 제공됩니다.
 
 - `CONFIG_KUNIT=y`
+- `CONFIG_KUNIT_DEBUGFS=y`
 - `CONFIG_GCOV_KERNEL=y`
 
-해당 커널로 부팅한 뒤 다음 스크립트로 커널 모듈 단위 테스트를 실행하고 커버리지 보고서를 생성할 수 있습니다.
+해당 커널로 부팅하고 debugfs를 `/sys/kernel/debug`에 마운트한 뒤 다음 스크립트로
+커널 모듈 단위 테스트를 실행하고 커버리지 보고서를 생성할 수 있습니다.
+스크립트는 모듈을 내리기 전에 해당 실행의 `hermos_test_suite/results` KTAP을 읽습니다.
+이미 같은 suite 결과가 있으면 실행을 거부하므로 이전 테스트 모듈이 남아 있는지 확인하세요.
 
 ```bash
 bash scripts/test/run_kunit.bash

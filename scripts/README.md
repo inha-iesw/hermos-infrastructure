@@ -58,7 +58,7 @@ Each script is a thin wrapper that runs `source install/setup.bash` followed by 
 | Script | Purpose |
 |---|---|
 | `test/test_and_create_report.bash` | Build with coverage flags, run `colcon test`, and generate the HTML coverage report for `hermoslib`. Temporarily removes apt-installed `hermos-heaphook` if present and restores it at the end. |
-| `test/run_kunit.bash` | Build and insert `hermos_kunit.ko`, parse pass/fail from dmesg, and generate the HTML coverage report for the kernel module. Requires a kernel with `CONFIG_KUNIT=y` and `CONFIG_GCOV_KERNEL=y`. |
+| `test/run_kunit.bash` | Build and insert `hermos_kunit.ko`, parse KTAP pass/fail from debugfs, and generate the HTML coverage report for the kernel module. Requires a kernel with `CONFIG_KUNIT=y`, `CONFIG_KUNIT_DEBUGFS=y` and `CONFIG_GCOV_KERNEL=y`. |
 | `test/run_requires_kernel_module_tests.bash` | Build `hermos_e2e_test` and run `colcon test` filtered to the `requires_kernel_module` label. Kernel module must already be loaded. |
 | `test/e2e_test_1to1.bash` | 1-publisher / 1-subscriber end-to-end test sweeping publisher type (hermos/ros2), QoS depth, transient-local, take-subscription, and launch-order combinations. Options: `-s` single, `-c` continue-on-failure, `-p N` parallel workers. |
 | `test/e2e_test_2to2.bash` | 2-publisher / 2-subscriber end-to-end test sweeping container layouts and `agno↔ros2` bridge modes. Options: `-s`, `-c`. |
