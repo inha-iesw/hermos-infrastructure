@@ -1627,6 +1627,28 @@ void hermos_commit_exit_process(
   up_write(&global_htables_rwsem);
 }
 
+struct topic_name_snapshot
+{
+  char name[TOPIC_NAME_BUFFER_SIZE];
+  uint32_t domain_id;
+};
+
+// All wrapper pointers and locks must be released before accessing user memory.
+static int copy_topic_name_snapshot(
+  const struct topic_name_snapshot * snapshot, uint32_t count, uint64_t names_addr,
+  uint64_t domains_addr)
+{
+  for (uint32_t i = 0; i < count; ++i) {
+    if (copy_to_user(
+          (char __user *)u64_to_user_ptr(names_addr) + i * TOPIC_NAME_BUFFER_SIZE,
+          snapshot[i].name, strlen(snapshot[i].name) + 1)) return -EFAULT;
+    if (domains_addr && copy_to_user(
+          (uint32_t __user *)u64_to_user_ptr(domains_addr) + i,
+          &snapshot[i].domain_id, sizeof(snapshot[i].domain_id))) return -EFAULT;
+  }
+  return 0;
+}
+
 // Intentionally namespace-scoped, not caller-domain-scoped: this returns every
 // domain's topics, each stamped with its domain_id, rather than filtering to the
 // caller's ROS_DOMAIN_ID. get_topic_*_info takes a domain input and filters here;
@@ -1639,6 +1661,9 @@ int hermos_ioctl_get_topic_list(
 {
   int ret = 0;
   uint32_t topic_num = 0;
+  const uint32_t capacity = min_t(uint32_t, topic_list_args->topic_name_buffer_size, MAX_TOPIC_NUM);
+  struct topic_name_snapshot * snapshot = kvcalloc(capacity, sizeof(*snapshot), GFP_KERNEL);
+  if (!snapshot) return -ENOMEM;
 
   down_read(&global_htables_rwsem);
 
@@ -1658,31 +1683,21 @@ int hermos_ioctl_get_topic_list(
       goto unlock;
     }
 
-    if (copy_to_user(
-          (char __user *)(topic_list_args->topic_name_buffer_addr +
-                          topic_num * TOPIC_NAME_BUFFER_SIZE),
-          wrapper->key, strlen(wrapper->key) + 1)) {
-      ret = -EFAULT;
-      goto unlock;
-    }
-
-    if (topic_list_args->domain_id_buffer_addr) {
-      uint32_t domain_id = wrapper->domain_id;
-      uint32_t __user * domain_id_buffer =
-        (uint32_t __user *)u64_to_user_ptr(topic_list_args->domain_id_buffer_addr);
-      if (copy_to_user(domain_id_buffer + topic_num, &domain_id, sizeof(domain_id))) {
-        ret = -EFAULT;
-        goto unlock;
-      }
-    }
+    strscpy(snapshot[topic_num].name, wrapper->key, TOPIC_NAME_BUFFER_SIZE);
+    snapshot[topic_num].domain_id = wrapper->domain_id;
 
     topic_num++;
   }
 
-  topic_list_args->ret_topic_num = topic_num;
-
 unlock:
   up_read(&global_htables_rwsem);
+  if (!ret) {
+    ret = copy_topic_name_snapshot(
+      snapshot, topic_num, topic_list_args->topic_name_buffer_addr,
+      topic_list_args->domain_id_buffer_addr);
+    if (!ret) topic_list_args->ret_topic_num = topic_num;
+  }
+  kvfree(snapshot);
   return ret;
 }
 
@@ -1692,6 +1707,9 @@ int hermos_ioctl_get_node_subscriber_topics(
 {
   int ret = 0;
   uint32_t topic_num = 0;
+  const uint32_t capacity = min_t(uint32_t, node_info_args->topic_name_buffer_size, MAX_TOPIC_NUM);
+  struct topic_name_snapshot * snapshot = kvcalloc(capacity, sizeof(*snapshot), GFP_KERNEL);
+  if (!snapshot) return -ENOMEM;
 
   down_read(&global_htables_rwsem);
 
@@ -1729,22 +1747,20 @@ int hermos_ioctl_get_node_subscriber_topics(
         goto unlock;
       }
 
-      if (copy_to_user(
-            (char __user *)(node_info_args->topic_name_buffer_addr +
-                            topic_num * TOPIC_NAME_BUFFER_SIZE),
-            wrapper->key, strlen(wrapper->key) + 1)) {
-        ret = -EFAULT;
-        goto unlock;
-      }
+      strscpy(snapshot[topic_num].name, wrapper->key, TOPIC_NAME_BUFFER_SIZE);
 
       topic_num++;
     }
   }
 
-  node_info_args->ret_topic_num = topic_num;
-
 unlock:
   up_read(&global_htables_rwsem);
+  if (!ret) {
+    ret = copy_topic_name_snapshot(
+      snapshot, topic_num, node_info_args->topic_name_buffer_addr, 0);
+    if (!ret) node_info_args->ret_topic_num = topic_num;
+  }
+  kvfree(snapshot);
   return ret;
 }
 
@@ -1754,6 +1770,9 @@ int hermos_ioctl_get_node_publisher_topics(
 {
   int ret = 0;
   uint32_t topic_num = 0;
+  const uint32_t capacity = min_t(uint32_t, node_info_args->topic_name_buffer_size, MAX_TOPIC_NUM);
+  struct topic_name_snapshot * snapshot = kvcalloc(capacity, sizeof(*snapshot), GFP_KERNEL);
+  if (!snapshot) return -ENOMEM;
 
   down_read(&global_htables_rwsem);
 
@@ -1791,22 +1810,20 @@ int hermos_ioctl_get_node_publisher_topics(
         goto unlock;
       }
 
-      if (copy_to_user(
-            (char __user *)(node_info_args->topic_name_buffer_addr +
-                            topic_num * TOPIC_NAME_BUFFER_SIZE),
-            wrapper->key, strlen(wrapper->key) + 1)) {
-        ret = -EFAULT;
-        goto unlock;
-      }
+      strscpy(snapshot[topic_num].name, wrapper->key, TOPIC_NAME_BUFFER_SIZE);
 
       topic_num++;
     }
   }
 
-  node_info_args->ret_topic_num = topic_num;
-
 unlock:
   up_read(&global_htables_rwsem);
+  if (!ret) {
+    ret = copy_topic_name_snapshot(
+      snapshot, topic_num, node_info_args->topic_name_buffer_addr, 0);
+    if (!ret) node_info_args->ret_topic_num = topic_num;
+  }
+  kvfree(snapshot);
   return ret;
 }
 
@@ -1883,16 +1900,17 @@ int hermos_ioctl_get_topic_subscriber_info(
     idx++;
   }
 
+  up_read(&wrapper->topic->rwsem);
+  up_read(&global_htables_rwsem);
   if (
     subscriber_num > 0 &&
     copy_to_user(user_buffer, topic_info_mem, sizeof(struct topic_info_ret) * subscriber_num)) {
-    kvfree(topic_info_mem);
     ret = -EFAULT;
-    goto unlock;
+  } else {
+    topic_info_args->ret_topic_info_ret_num = subscriber_num;
   }
-
   kvfree(topic_info_mem);
-  topic_info_args->ret_topic_info_ret_num = subscriber_num;
+  return ret;
 
 unlock:
   up_read(&wrapper->topic->rwsem);
@@ -1973,16 +1991,17 @@ int hermos_ioctl_get_topic_publisher_info(
     idx++;
   }
 
+  up_read(&wrapper->topic->rwsem);
+  up_read(&global_htables_rwsem);
   if (
     publisher_num > 0 &&
     copy_to_user(user_buffer, topic_info_mem, sizeof(struct topic_info_ret) * publisher_num)) {
-    kvfree(topic_info_mem);
     ret = -EFAULT;
-    goto unlock;
+  } else {
+    topic_info_args->ret_topic_info_ret_num = publisher_num;
   }
-
   kvfree(topic_info_mem);
-  topic_info_args->ret_topic_info_ret_num = publisher_num;
+  return ret;
 
 unlock:
   up_read(&wrapper->topic->rwsem);
