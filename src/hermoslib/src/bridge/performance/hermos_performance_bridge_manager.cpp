@@ -6,13 +6,12 @@
 #include "hermos/hermos_utils.hpp"
 #include "hermos/bridge/hermos_bridge_msg.hpp"
 #include "hermos/bridge/hermos_bridge_utils.hpp"
+#include "bridge_message_validation.hpp"
 
 #include <sys/prctl.h>
 #include <unistd.h>
 
-#include <algorithm>
 #include <cstddef>
-#include <cstring>
 
 namespace hermos
 {
@@ -102,33 +101,14 @@ void PerformanceBridgeManager::start_ros_execution()
 
 void PerformanceBridgeManager::on_bridge_message(const void * data, std::size_t size)
 {
-  if (size < offsetof(BridgeMsg, payload)) {
-    RCLCPP_WARN(
-      logger_,
-      "bridge msg too small to carry a discriminator: got %zu bytes, expected at least %zu", size,
-      offsetof(BridgeMsg, payload));
+  BridgeMsg msg{};
+  if (!detail::decode_bridge_message(data, size, msg)) {
+    RCLCPP_WARN(logger_, "Ignoring invalid bridge message (%zu bytes)", size);
     return;
   }
 
-  BridgeMsg msg{};
-  const size_t copy_size = std::min(size, sizeof(BridgeMsg));
-  std::memcpy(&msg, data, copy_size);
-
-  const auto validate_variant_size = [&](size_t expected) -> bool {
-    if (size < expected) {
-      RCLCPP_WARN(
-        logger_, "bridge msg (type=%u) truncated: got %zu bytes, expected at least %zu",
-        static_cast<uint32_t>(msg.type), size, expected);
-      return false;
-    }
-    return true;
-  };
-
   switch (msg.type) {
     case BridgeMsgType::Service: {
-      if (!validate_variant_size(bridge_msg_wire_size<BridgeMsgServicePayload>())) {
-        return;
-      }
       const auto & payload = msg.payload.service;
       ServiceBridgeDeps deps{container_node_, executor_, logger_, loader_};
       std::string service_name = static_cast<const char *>(payload.service_name);
@@ -147,9 +127,6 @@ void PerformanceBridgeManager::on_bridge_message(const void * data, std::size_t 
       break;
     }
     case BridgeMsgType::PubSub: {
-      if (!validate_variant_size(bridge_msg_wire_size<BridgeMsgPubSubPayload>())) {
-        return;
-      }
       const auto & payload = msg.payload.pubsub;
       std::string topic_name = static_cast<const char *>(payload.topic_name);
       topic_local_id_t target_id = payload.target_id;
@@ -162,9 +139,6 @@ void PerformanceBridgeManager::on_bridge_message(const void * data, std::size_t 
       break;
     }
     case BridgeMsgType::DaemonPubSub: {
-      if (!validate_variant_size(bridge_msg_wire_size<BridgeMsgDaemonPubSubPayload>())) {
-        return;
-      }
       register_daemon_pubsub_request(msg.payload.daemon_pubsub);
       break;
     }

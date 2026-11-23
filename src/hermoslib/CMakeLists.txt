@@ -185,6 +185,7 @@ if(BUILD_TESTING)
     test/unit/test_hermos_generic_publisher.cpp
     test/unit/test_daemon_bridge_uds.cpp
     test/unit/test_hermos_bridge_uds.cpp
+    test/unit/bridge/test_message_validation.cpp
     test/unit/test_discovery_agent_auto_fork.cpp
     test/unit/test_bridge_node_name.cpp)
   target_include_directories(test_unit_${PROJECT_NAME} PRIVATE include src)
