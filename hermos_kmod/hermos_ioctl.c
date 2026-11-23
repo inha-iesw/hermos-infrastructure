@@ -795,6 +795,11 @@ int hermos_ioctl_add_subscriber(
     ret = -EACCES;
     goto unlock;
   }
+  if (qos_depth == 0) {
+    ret = -EINVAL;
+    goto unlock;
+  }
+
   struct topic_wrapper * wrapper;
   ret = add_topic(topic_name, ipc_ns, proc_info->domain_id, &wrapper);
   if (ret < 0) {
@@ -836,6 +841,11 @@ int hermos_ioctl_add_publisher(
     ret = -EACCES;
     goto unlock;
   }
+  if (qos_depth == 0) {
+    ret = -EINVAL;
+    goto unlock;
+  }
+
   struct topic_wrapper * wrapper;
   ret = add_topic(topic_name, ipc_ns, proc_info->domain_id, &wrapper);
   if (ret < 0) {

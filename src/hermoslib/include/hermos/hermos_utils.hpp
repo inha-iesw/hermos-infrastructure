@@ -47,7 +47,7 @@ inline void validate_qos_common(const rclcpp::QoS & qos)
   }
 
   if (qos.depth() == 0) {
-    RCLCPP_WARN(logger, "Hermos does not support QoS depth=0. No messages will be delivered.");
+    RCLCPP_WARN(logger, "Hermos does not support QoS depth=0. Endpoint creation will be rejected.");
   }
 
   if (rmw_qos.avoid_ros_namespace_conventions) {

@@ -161,6 +161,16 @@ void test_case_add_subscriber_requires_registration(struct kunit * test)
   KUNIT_EXPECT_EQ(test, hermos_get_topic_num(current->nsproxy->ipc_ns), 0);
 }
 
+void test_case_add_subscriber_rejects_zero_depth(struct kunit * test)
+{
+  setup_process(test, 1000);
+  union ioctl_add_subscriber_args result = {};
+  KUNIT_EXPECT_EQ(test, hermos_ioctl_add_subscriber(
+    TOPIC_NAME, current->nsproxy->ipc_ns, NODE_NAME, 1000, 0, false, true, false, false, false,
+    &result), -EINVAL);
+  KUNIT_EXPECT_EQ(test, hermos_get_topic_num(current->nsproxy->ipc_ns), 0);
+}
+
 void test_case_add_subscriber_rejects_exited_process(struct kunit * test)
 {
   setup_process(test, 1000);

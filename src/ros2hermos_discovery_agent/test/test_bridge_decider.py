@@ -7,6 +7,7 @@ bytes) in ``hermos_bridge_msg.hpp``.
 """
 
 import struct
+import pytest
 
 from ros2hermos_discovery_agent.bridge_decider import (
     BridgeRequest,
@@ -72,6 +73,28 @@ def test_decide_emits_r2a_when_local_sub_remote_pub():
     reqs = decide_bridges(local, {('OTHER', 222): remote})
     assert len(reqs) == 1
     assert reqs[0].direction == DIRECTION_ROS2_TO_HERMOS
+
+
+@pytest.mark.parametrize('local_role,remote_role', [('pubs', 'subs'), ('subs', 'pubs')])
+def test_zero_depth_endpoints_are_not_bridge_candidates(local_role, remote_role):
+    local = _state(topics=[_topic('/x', **{local_role: [_endpoint('/local', depth=0)]})])
+    remote = _state(host_uuid='OTHER', ipc_ns=222,
+                    topics=[_topic('/x', **{remote_role: [_endpoint('/remote')]})])
+    assert decide_bridges(local, {('OTHER', 222): remote}) == []
+    getattr(local.topics[0], 'publishers' if local_role == 'pubs' else 'subscribers').append(
+        _endpoint('/valid', depth=3))
+    requests = decide_bridges(local, {('OTHER', 222): remote})
+    assert len(requests) == 1 and requests[0].qos_depth == 3
+    getattr(remote.topics[0], 'publishers' if remote_role == 'pubs' else 'subscribers')[0].qos_depth = 0
+    assert decide_bridges(local, {('OTHER', 222): remote}) == []
+
+
+@pytest.mark.parametrize('depth', [0, -1, 2**32, True])
+def test_serialize_rejects_invalid_depth_before_sending(depth):
+    request = BridgeRequest('/x', 'std_msgs/msg/Int32', DIRECTION_ROS2_TO_HERMOS,
+                            depth, False, True)
+    with pytest.raises(ValueError, match='depth'):
+        serialize_request(request)
 
 
 def test_decide_emits_both_directions_when_both_sides_have_both():

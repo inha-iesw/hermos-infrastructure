@@ -68,6 +68,8 @@ class BridgeRequest:
 
 
 def serialize_request(req: BridgeRequest) -> bytes:
+    if type(req.qos_depth) is not int or not 1 <= req.qos_depth <= 0xffffffff:
+        raise ValueError('bridge QoS depth must be a positive uint32')
     topic = req.topic_name.encode('utf-8')[: TOPIC_NAME_BUFFER_SIZE - 1]
     type_name = req.type_name.encode('utf-8')[: MESSAGE_TYPE_BUFFER_SIZE - 1]
     return struct.pack(
@@ -120,10 +122,12 @@ def decide_bridges(local_state, remote_states) -> list:
             if local_topic is None:
                 continue
 
-            local_pubs = [p for p in local_topic.publishers if not p.is_bridge]
-            local_subs = [s for s in local_topic.subscribers if not s.is_bridge]
-            remote_pubs = [p for p in remote_topic.publishers if not p.is_bridge]
-            remote_subs = [s for s in remote_topic.subscribers if not s.is_bridge]
+            # Older peers may announce depth-zero endpoints; they cannot form
+            # a valid bridge and must never reach native endpoint creation.
+            local_pubs = [p for p in local_topic.publishers if not p.is_bridge and p.qos_depth > 0]
+            local_subs = [s for s in local_topic.subscribers if not s.is_bridge and s.qos_depth > 0]
+            remote_pubs = [p for p in remote_topic.publishers if not p.is_bridge and p.qos_depth > 0]
+            remote_subs = [s for s in remote_topic.subscribers if not s.is_bridge and s.qos_depth > 0]
 
             domain_id = local_topic.domain_id
             type_name = types.get((local_topic.topic_name, domain_id))

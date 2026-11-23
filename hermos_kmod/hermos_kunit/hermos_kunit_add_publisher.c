@@ -143,3 +143,14 @@ void test_case_add_publisher_rejects_namespace_mismatch(struct kunit * test)
   KUNIT_EXPECT_EQ(test, hermos_get_topic_num(current->nsproxy->ipc_ns), 0);
 }
 
+void test_case_add_publisher_rejects_zero_depth(struct kunit * test)
+{
+  union ioctl_add_process_args process = {};
+  KUNIT_ASSERT_EQ(test, hermos_ioctl_add_process(
+    publisher_pid, current->nsproxy->ipc_ns, false, 0, &process), 0);
+  union ioctl_add_publisher_args result = {};
+  KUNIT_EXPECT_EQ(test, hermos_ioctl_add_publisher(
+    topic_name, current->nsproxy->ipc_ns, node_name, publisher_pid, 0, false, false, &result),
+    -EINVAL);
+  KUNIT_EXPECT_EQ(test, hermos_get_topic_num(current->nsproxy->ipc_ns), 0);
+}

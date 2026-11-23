@@ -153,11 +153,11 @@ def test_only_bridge_writers_can_trigger_cross_namespace_bridges(monkeypatch, ro
     local, remote = _state(), _state(session='remote')
     local.host_uuid, local.ipc_ns_inode = 'local', 1
     local.topics = [HermosTopic(topic_name='/x', domain_id=7, type_name='std_msgs/msg/Int32',
-                               publishers=[HermosEndpoint(node_name='/writer')])]
+                               publishers=[HermosEndpoint(node_name='/writer', qos_depth=1)])]
     remote.writer_role = role
     remote.device_id = '241:0'  # Device numbers need not match across hosts/namespaces.
     remote.topics = [HermosTopic(topic_name='/x', domain_id=7, type_name='std_msgs/msg/Int32',
-                                subscribers=[HermosEndpoint(node_name='/reader')])]
+                                subscribers=[HermosEndpoint(node_name='/reader', qos_depth=1)])]
     state = SimpleNamespace(_host_uuid='local', _ipc_ns_inode=1, _domain_id=7,
                             get_logger=Mock(), _remote_states={})
     dispatch = Mock()
