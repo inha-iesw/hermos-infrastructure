@@ -1,4 +1,6 @@
 #include "hermos_cie_thread_configurator/thread_configurator_node.hpp"
+#include "affinity/cpuset.hpp"
+#include "affinity/deadline.hpp"
 
 #include "hermos_cie_thread_configurator/cie_thread_configurator.hpp"
 #include "hermos_cie_thread_configurator/sched_deadline.hpp"
@@ -14,9 +16,9 @@
 #include <sys/time.h>
 #include <unistd.h>
 
-#include <filesystem>
 #include <fstream>
 #include <optional>
+#include <limits>
 #include <set>
 #include <string>
 #include <utility>
@@ -230,9 +232,8 @@ void ThreadConfiguratorNode::validate_hardware_info(const YAML::Node & yaml)
 ThreadConfiguratorNode::~ThreadConfiguratorNode()
 {
   stop();
-  const int cgroup_count = cgroup_num_.load();
-  for (int i = 0; i < cgroup_count; i++) {
-    rmdir(("/sys/fs/cgroup/cpuset/" + std::to_string(i)).c_str());
+  for (const auto & path : owned_cgroups_) {
+    rmdir(path.c_str());
   }
 }
 
@@ -266,46 +267,27 @@ void ThreadConfiguratorNode::print_all_unapplied()
   }
 }
 
-bool ThreadConfiguratorNode::set_affinity_by_cgroup(
-  int64_t thread_id, const std::vector<int> & cpus)
-{
-  const int my_id = cgroup_num_.fetch_add(1, std::memory_order_relaxed);
-  std::string cgroup_path = "/sys/fs/cgroup/cpuset/" + std::to_string(my_id);
-  if (!std::filesystem::create_directory(cgroup_path)) {
-    return false;
-  }
-
-  std::string cpus_path = cgroup_path + "/cpuset.cpus";
-  if (std::ofstream cpus_file{cpus_path}) {
-    for (size_t i = 0; i < cpus.size(); i++) {
-      if (i > 0) {
-        cpus_file << ",";
-      }
-      cpus_file << cpus[i];
-    }
-  } else {
-    return false;
-  }
-
-  std::string mems_path = cgroup_path + "/cpuset.mems";
-  if (std::ofstream mems_file{mems_path}) {
-    mems_file << 0;
-  } else {
-    return false;
-  }
-
-  std::string tasks_path = cgroup_path + "/tasks";
-  if (std::ofstream tasks_file{tasks_path}) {
-    tasks_file << thread_id;
-  } else {
-    return false;
-  }
-
-  return true;
-}
-
 bool ThreadConfiguratorNode::issue_syscalls(const ThreadConfig & config, int64_t thread_id)
 {
+  if (thread_id <= 0 || thread_id > std::numeric_limits<pid_t>::max()) {
+    RCLCPP_ERROR(this->get_logger(), "Invalid thread ID: %ld", thread_id);
+    return false;
+  }
+  // DEADLINE must pass admission before its cgroup narrows the CPU mask.
+  if (!config.affinity.empty() && config.policy != "SCHED_DEADLINE") {
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    for (int cpu : config.affinity) {
+      CPU_SET(cpu, &set);
+    }
+    if (sched_setaffinity(thread_id, sizeof(set), &set) == -1) {
+      RCLCPP_ERROR(
+        this->get_logger(), "Failed to configure affinity (thread=%s, tid=%ld): %s",
+        config.thread_str.c_str(), thread_id, strerror(errno));
+      return false;
+    }
+  }
+
   if (
     config.policy == "SCHED_OTHER" || config.policy == "SCHED_BATCH" ||
     config.policy == "SCHED_IDLE") {
@@ -355,7 +337,33 @@ bool ThreadConfiguratorNode::issue_syscalls(const ThreadConfig & config, int64_t
     attr.sched_period = config.period;
     attr.sched_deadline = config.deadline;
 
-    if (sched_setattr(thread_id, &attr, 0) == -1) {
+    if (!config.affinity.empty()) {
+      std::lock_guard<std::mutex> lock(cgroup_mutex_);
+      const std::string path = "/sys/fs/cgroup/cpuset/hermos-" + std::to_string(getpid()) +
+        "-" + std::to_string(cgroup_num_++);
+      const auto result = hermos_cie_thread_configurator::detail::apply_deadline_affinity(
+        attr, {
+          [&]() { return hermos_cie_thread_configurator::detail::prepare_cpuset(
+              path, config.affinity); },
+          [&](sched_attr & previous) {
+            return syscall(__NR_sched_getattr, thread_id, &previous, sizeof(previous), 0) == 0;
+          },
+          [&](const sched_attr & policy) { return sched_setattr(thread_id, &policy, 0) == 0; },
+          [&]() { return hermos_cie_thread_configurator::detail::attach_cpuset(path, thread_id); },
+          [&]() { rmdir(path.c_str()); }});
+      if (result.failed_operation) {
+        RCLCPP_ERROR(
+          this->get_logger(), "Failed to %s (thread=%s, tid=%ld): %s",
+          result.failed_operation, config.thread_str.c_str(), thread_id, strerror(result.error));
+        if (result.restore_error) {
+          RCLCPP_ERROR(
+            this->get_logger(), "Failed to restore policy (thread=%s, tid=%ld): %s",
+            config.thread_str.c_str(), thread_id, strerror(result.restore_error));
+        }
+        return false;
+      }
+      owned_cgroups_.push_back(path);
+    } else if (sched_setattr(thread_id, &attr, 0) == -1) {
       RCLCPP_ERROR(
         this->get_logger(), "Failed to configure policy (thread=%s, tid=%ld): %s",
         config.thread_str.c_str(), thread_id, strerror(errno));
@@ -368,30 +376,6 @@ bool ThreadConfiguratorNode::issue_syscalls(const ThreadConfig & config, int64_t
     return false;
   }
 
-  if (config.affinity.size() > 0) {
-    if (config.policy == "SCHED_DEADLINE") {
-      if (!set_affinity_by_cgroup(thread_id, config.affinity)) {
-        RCLCPP_ERROR(
-          this->get_logger(), "Failed to configure affinity (thread=%s, tid=%ld): %s",
-          config.thread_str.c_str(), thread_id,
-          "Please disable cgroup v2 if used: "
-          "`systemd.unified_cgroup_hierarchy=0`");
-        return false;
-      }
-    } else {
-      cpu_set_t set;
-      CPU_ZERO(&set);
-      for (int cpu : config.affinity) {
-        CPU_SET(cpu, &set);
-      }
-      if (sched_setaffinity(thread_id, sizeof(set), &set) == -1) {
-        RCLCPP_ERROR(
-          this->get_logger(), "Failed to configure affinity (thread=%s, tid=%ld): %s",
-          config.thread_str.c_str(), thread_id, strerror(errno));
-        return false;
-      }
-    }
-  }
 
   return true;
 }

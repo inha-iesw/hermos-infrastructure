@@ -73,8 +73,14 @@ void parse_yaml(
       }
     }
     cfg.domain_id = cg["domain_id"] ? cg["domain_id"].as<size_t>() : default_domain_id;
-    for (auto & cpu : cg["affinity"]) cfg.affinity.push_back(cpu.as<int>());
     cfg.policy = cg["policy"].as<std::string>();
+    for (auto & cpu : cg["affinity"]) {
+      const int index = cpu.as<int>();
+      if (index < 0 || (index >= CPU_SETSIZE && cfg.policy != "SCHED_DEADLINE")) {
+        throw std::runtime_error("CPU affinity index is outside the supported mask");
+      }
+      cfg.affinity.push_back(index);
+    }
 
     if (policy_to_sched_const.count(cfg.policy) == 0) {
       throw std::runtime_error(
@@ -97,8 +103,14 @@ void parse_yaml(
     auto & cfg = non_ros_threads_out[i];
 
     cfg.thread_str = nrt["name"].as<std::string>();
-    for (auto & cpu : nrt["affinity"]) cfg.affinity.push_back(cpu.as<int>());
     cfg.policy = nrt["policy"].as<std::string>();
+    for (auto & cpu : nrt["affinity"]) {
+      const int index = cpu.as<int>();
+      if (index < 0 || (index >= CPU_SETSIZE && cfg.policy != "SCHED_DEADLINE")) {
+        throw std::runtime_error("CPU affinity index is outside the supported mask");
+      }
+      cfg.affinity.push_back(index);
+    }
 
     if (policy_to_sched_const.count(cfg.policy) == 0) {
       throw std::runtime_error(

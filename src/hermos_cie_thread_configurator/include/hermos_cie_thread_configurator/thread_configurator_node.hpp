@@ -41,7 +41,6 @@ public:
 private:
   void validate_hardware_info(const YAML::Node & yaml);
   void validate_rt_throttling(const YAML::Node & yaml);
-  bool set_affinity_by_cgroup(int64_t thread_id, const std::vector<int> & cpus);
   // thread_id is passed explicitly because a wildcard entry applies to many
   // threads (one per matched_tids element), not just config.thread_id.
   bool issue_syscalls(const ThreadConfig & config, int64_t thread_id);
@@ -71,7 +70,9 @@ private:
   std::map<std::string, ThreadConfig *> id_to_non_ros_thread_config_;
 
   std::atomic<int> unapplied_num_{0};
-  std::atomic<int> cgroup_num_{0};
+  unsigned int cgroup_num_{0};
+  std::mutex cgroup_mutex_;
+  std::vector<std::string> owned_cgroups_;
   std::atomic<bool> configured_at_least_once_{false};
 
   const std::string config_file_;

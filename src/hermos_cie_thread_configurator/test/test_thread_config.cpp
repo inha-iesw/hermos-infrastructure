@@ -439,3 +439,19 @@ TEST(DefaultDomainId, MatchesRclEnvironmentInterpretation)
   }
 }
 
+TEST(ParseYaml, RejectsCpuIndicesOutsideFixedAffinityMask)
+{
+  for (const char * section : {"callback_groups", "non_ros_threads"}) {
+    for (int cpu : {-1, CPU_SETSIZE}) {
+      YAML::Node yaml;
+      YAML::Node entry;
+      entry[std::string(section) == "callback_groups" ? "id" : "name"] = "worker";
+      entry["policy"] = "SCHED_OTHER";
+      entry["priority"] = 0;
+      entry["affinity"].push_back(cpu);
+      yaml[section].push_back(entry);
+      std::vector<acie::ThreadConfig> callbacks, threads;
+      EXPECT_THROW(acie::parse_yaml(yaml, 0, callbacks, threads), std::runtime_error);
+    }
+  }
+}

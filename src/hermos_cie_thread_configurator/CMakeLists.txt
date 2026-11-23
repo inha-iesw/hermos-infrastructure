@@ -15,6 +15,8 @@ add_library(hermos_thread_configurator SHARED
   src/util.cpp
   src/non_ros_thread_ipc.cpp
   src/thread_config.cpp
+  src/affinity/cpuset.cpp
+  src/affinity/deadline.cpp
 )
 ament_target_dependencies(hermos_thread_configurator rclcpp hermos_cie_config_msgs)
 target_link_libraries(hermos_thread_configurator yaml-cpp)
@@ -80,6 +82,14 @@ if(BUILD_TESTING)
   )
   target_link_libraries(test_${PROJECT_NAME} hermos_thread_configurator)
   target_include_directories(test_${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+  ament_add_gtest(test_cpuset test/affinity/test_cpuset.cpp)
+  target_link_libraries(test_cpuset hermos_thread_configurator)
+  target_include_directories(test_cpuset PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+  ament_add_gtest(test_deadline_affinity test/affinity/test_deadline.cpp)
+  target_link_libraries(test_deadline_affinity hermos_thread_configurator)
+  target_include_directories(test_deadline_affinity PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
   ament_add_gtest(test_thread_config
     test/test_thread_config.cpp
