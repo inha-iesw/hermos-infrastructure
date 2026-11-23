@@ -47,7 +47,30 @@ jobs:
         if: steps.check_artifact.outputs.exists == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COVERAGE_ROS_DISTRO: ${{ matrix.ros_distro }}
         run: |
-          coverage_text=$(<coverage.txt)
-          PR_NUMBER=$(<pr_number.txt)
-          gh pr comment "$PR_NUMBER" --repo "${{ github.repository }}" --body "$(echo -e '<details>\n<summary>Coverage Report (${{ matrix.ros_distro }})</summary>\n\n```\n'"$coverage_text"'\n```\n</details>')"
+          # Bind the destination to GitHub's triggering run, never PR artifact data.
+          # Fork runs without a unique pull_requests association intentionally skip
+          # comments; no artifact-supplied PR number is accepted as a fallback.
+          PR_NUMBER=$(python3 -c '
+          import json, os
+          with open(os.environ["GITHUB_EVENT_PATH"]) as stream:
+              requests = json.load(stream)["workflow_run"]["pull_requests"]
+          if len(requests) != 1:
+              raise SystemExit(1)
+          number = requests[0]["number"]
+          if type(number) is not int or number <= 0:
+              raise SystemExit(1)
+          print(number)
+          ') || {
+            echo "No unique pull request associated with this run; skipping comment"
+            exit 0
+          }
+          body_file=$(mktemp)
+          trap 'rm -f "$body_file"' EXIT
+          {
+            printf '<details>\n<summary>Coverage Report (%s)</summary>\n\n```\n' "$COVERAGE_ROS_DISTRO"
+            cat coverage.txt
+            printf '\n```\n</details>\n'
+          } > "$body_file"
+          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$body_file"
