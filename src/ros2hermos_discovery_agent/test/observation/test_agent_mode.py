@@ -27,6 +27,7 @@ def test_agent_reader_does_not_expire_samples_using_remote_wall_clock(monkeypatc
     monkeypatch.setattr(agent, 'load_query_library', lambda **kwargs: object())
     state = SimpleNamespace(
         _host_uuid='host', _host_hostname='test', _ipc_ns_inode=1, _domain_id=7,
+        _session_id='test-session',
         _observation_only=False, create_publisher=Mock(), create_subscription=Mock(),
         create_timer=Mock(), get_logger=Mock(), _on_remote_state=Mock(), _on_tick=Mock())
     agent.DiscoveryAgent._initialize(state, Mock(), False)
@@ -102,6 +103,7 @@ def test_observer_loads_queries_only_and_never_commits_idle_exit(monkeypatch):
     monkeypatch.setattr(agent, 'load_query_library', loader)
     state = SimpleNamespace(
         _host_uuid='host', _host_hostname='test', _ipc_ns_inode=1, _domain_id=7,
+        _session_id='test-session',
         _observation_only=True, create_publisher=Mock(), create_subscription=Mock(),
         create_timer=Mock(), get_logger=Mock(), _on_remote_state=Mock(), _on_tick=Mock())
     agent.DiscoveryAgent._initialize(state, Mock(), True)

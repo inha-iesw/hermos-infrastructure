@@ -432,7 +432,7 @@ class DiscoveryAgent(Node):
         self.get_logger().info(
             f'hermos_discovery_agent up: host_uuid={self._host_uuid} '
             f'hostname={self._host_hostname} ipc_ns_inode={self._ipc_ns_inode} '
-            f'version={self._hermos_version}')
+            f'version={self._hermos_version} session={self._session_id}')
 
     def _on_tick(self) -> None:
         self._registry.cleanup_dead_pids()

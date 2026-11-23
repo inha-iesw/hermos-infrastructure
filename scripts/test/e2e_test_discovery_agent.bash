@@ -48,19 +48,24 @@ green "✓ kmod loaded and workspace sourced"
 
 # ----- start daemon -----
 LOG_DIR=$(mktemp -d)
+owned_groups=()
 cleanup() {
-    # pkill -P only reaches direct children; ros2 launch spawns its
-    # talker / agent as grandchildren, so also match by binary path.
-    pkill -P $$ 2>/dev/null || true
-    pkill -KILL -f '/hermos_sample_application/lib/.*/talker' 2>/dev/null || true
-    pkill -KILL -f '/ros2hermos_discovery_agent/lib/ros2hermos_discovery_agent/discovery_agent' 2>/dev/null || true
+    # Each command below gets its own session; never signal unrelated runs.
+    for group in "${owned_groups[@]}"; do
+        kill -TERM -- "-$group" 2>/dev/null || true
+    done
     sleep 1
+    for group in "${owned_groups[@]}"; do
+        kill -KILL -- "-$group" 2>/dev/null || true
+        wait "$group" 2>/dev/null || true
+    done
     rm -rf "$LOG_DIR"
 }
 trap cleanup EXIT
 
 yellow "Starting hermos_discovery_agent..."
-ros2 run ros2hermos_discovery_agent discovery_agent > "$LOG_DIR/agent.log" 2>&1 &
+setsid ros2 run ros2hermos_discovery_agent discovery_agent > "$LOG_DIR/agent.log" 2>&1 &
+owned_groups+=("$!")
 sleep "$DAEMON_WARMUP_SEC"
 
 if ! grep -q "discovery_agent up" "$LOG_DIR/agent.log"; then
@@ -69,7 +74,12 @@ if ! grep -q "discovery_agent up" "$LOG_DIR/agent.log"; then
     cat "$LOG_DIR/agent.log" >&2
     exit 2
 fi
-green "✓ daemon started"
+SESSION_ID=$(sed -nE 's/.*session=([[:xdigit:]-]+).*/\1/p' "$LOG_DIR/agent.log" | tail -1)
+if [[ ! "$SESSION_ID" =~ ^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$ ]]; then
+    red "ERROR: this daemon did not report a valid session ID."
+    exit 2
+fi
+green "✓ daemon started (session $SESSION_ID)"
 
 # ----- assert msg shape -----
 fail() {
@@ -80,7 +90,7 @@ fail() {
     exit 2
 }
 
-msg=$(timeout "$ECHO_TIMEOUT_SEC" ros2 topic echo --once /_hermos_discovery_v2 2>&1) \
+msg=$(timeout "$ECHO_TIMEOUT_SEC" ros2 topic echo --once --filter "m.session_id == '$SESSION_ID'" /_hermos_discovery_v2 2>&1) \
     || fail "ros2 topic echo on /_hermos_discovery_v2 timed out or failed" "$msg"
 
 grep -q '^schema_version: 2$'                       <<<"$msg" || fail "schema_version != 2" "$msg"
@@ -110,12 +120,13 @@ green "✓ QoS profile: RELIABLE + TRANSIENT_LOCAL + Liveliness AUTOMATIC"
 
 # ----- pop a talker in the same IPC NS and assert its endpoint shows up -----
 yellow "Starting hermos_sample_application talker (discovery_agent=false to avoid a 2nd agent)..."
-ros2 launch hermos_sample_application talker.launch.xml discovery_agent:=false \
+setsid ros2 launch hermos_sample_application talker.launch.xml discovery_agent:=false \
     > "$LOG_DIR/talker.log" 2>&1 &
+owned_groups+=("$!")
 # Give the talker time to call its Publisher<T> ctor and the daemon time to
 # observe it on its next 1 Hz tick.
 sleep 3
-msg_with_topic=$(timeout "$ECHO_TIMEOUT_SEC" ros2 topic echo --once /_hermos_discovery_v2 2>&1) \
+msg_with_topic=$(timeout "$ECHO_TIMEOUT_SEC" ros2 topic echo --once --filter "m.session_id == '$SESSION_ID'" /_hermos_discovery_v2 2>&1) \
     || fail "ros2 topic echo (with talker running) timed out" "$msg_with_topic"
 
 grep -q 'topic_name: /my_topic'      <<<"$msg_with_topic" || fail "talker's /my_topic not seen in snapshot" "$msg_with_topic"
