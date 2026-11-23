@@ -15,6 +15,8 @@
 #include <atomic>
 #include <cerrno>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <span>
@@ -52,6 +54,121 @@ std::mutex mmap_mtx;
 // Root Cause: T2's callback uses `shm_addr` that T1 fetched but hadn't initialized/mapped yet.
 // This mutex ensures atomicity for T1's critical section: from ioctl fetching publisher
 // info through to completing shared memory setup.
+
+namespace
+{
+// Every process maps the heaps of the kmod's fixed slots [start, start + num * size) at the
+// same addresses. A mapping another library places in that range (observed: 1 GiB anonymous
+// mappings created during CUDA start-up) makes a later MAP_FIXED_NOREPLACE heap mapping fail
+// with EEXIST. initialize_hermos therefore reserves the whole range PROT_NONE before other
+// libraries run, and heaps replace their own slot of the reservation with MAP_FIXED.
+// Written once during single-threaded initialization (inherited by fork), then only read.
+uintptr_t reserved_begin = 0;
+uintptr_t reserved_end = 0;
+uint64_t reserved_slot_size = 0;
+// MAP_FIXED replaces silently, so one bit per slot keeps the EEXIST guard against mapping
+// a slot twice. Slot counts above the bitmap leave the range unreserved.
+constexpr uint64_t MAX_RESERVED_SLOTS = 65536;
+std::atomic<uint64_t> mapped_slots[MAX_RESERVED_SLOTS / 64];
+
+// No heap allocation: this runs before the heaphook's allocator exists.
+bool read_module_parameter(const char * module, const char * name, unsigned long long & value)
+{
+  char path[256];
+  const int path_length =
+    snprintf(path, sizeof(path), "/sys/module/%s/parameters/%s", module, name);
+  if (path_length <= 0 || static_cast<size_t>(path_length) >= sizeof(path)) {
+    return false;
+  }
+  const int fd = open(path, O_RDONLY | O_CLOEXEC);
+  if (fd < 0) {
+    return false;
+  }
+  char text[32];
+  const ssize_t length = read(fd, text, sizeof(text) - 1);
+  close(fd);
+  if (length <= 0) {
+    return false;
+  }
+  text[length] = '\0';
+  char * end = nullptr;
+  errno = 0;
+  value = strtoull(text, &end, 10);
+  return errno == 0 && end != text && (*end == '\n' || *end == '\0');
+}
+
+void warn_heap_range_unreserved(const char * reason)
+{
+  char message[256];
+  const int length = snprintf(
+    message, sizeof(message),
+    "[WARN] [Hermos]: heap slot range not reserved (%s); foreign mappings can block heap slots\n",
+    reason);
+  if (length > 0) {
+    const size_t size = std::min(static_cast<size_t>(length), sizeof(message) - 1);
+    if (write(STDERR_FILENO, message, size) < 0) {
+      // Best-effort diagnostic; nothing else can report an unwritable stderr.
+    }
+  }
+}
+
+// The kmod's character device is named after the module (KBUILD_MODNAME), whose parameters
+// give the slot range. Failure keeps the unreserved behaviour and says so once.
+void reserve_heap_range(const char * device_path)
+{
+  const char * slash = strrchr(device_path, '/');
+  const char * module = slash != nullptr ? slash + 1 : device_path;
+  unsigned long long start = 0;
+  unsigned long long num = 0;
+  unsigned long long size_gb = 0;
+  if (
+    !read_module_parameter(module, "mempool_start_addr", start) ||
+    !read_module_parameter(module, "mempool_num", num) ||
+    !read_module_parameter(module, "mempool_size_gb", size_gb)) {
+    warn_heap_range_unreserved("kmod parameters unreadable");
+    return;
+  }
+  if (num == 0 || num > MAX_RESERVED_SLOTS || size_gb == 0 || size_gb > (UINT64_MAX >> 30) / num) {
+    warn_heap_range_unreserved("unsupported slot count or size");
+    return;
+  }
+  const uint64_t slot_size = static_cast<uint64_t>(size_gb) << 30;
+  const uint64_t length = static_cast<uint64_t>(num) * slot_size;
+  if (start == 0 || start > UINTPTR_MAX - length) {
+    warn_heap_range_unreserved("slot range outside the address space");
+    return;
+  }
+  void * reservation = mmap(
+    reinterpret_cast<void *>(start), length, PROT_NONE,
+    MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED_NOREPLACE, -1, 0);
+  if (reservation == MAP_FAILED) {
+    warn_heap_range_unreserved(strerror(errno));
+    return;
+  }
+  if (reservation != reinterpret_cast<void *>(start)) {
+    // A kernel without MAP_FIXED_NOREPLACE treats the address as a hint only.
+    munmap(reservation, length);
+    warn_heap_range_unreserved("fixed reservation unsupported");
+    return;
+  }
+  reserved_begin = start;
+  reserved_end = start + length;
+  reserved_slot_size = slot_size;
+}
+
+// Returns the bitmap word and bit of a whole reserved slot, or nullptr outside the reservation.
+std::atomic<uint64_t> * reserved_slot(const uint64_t addr, const uint64_t size, uint64_t & bit)
+{
+  if (
+    reserved_end == 0 || size != reserved_slot_size || addr < reserved_begin ||
+    addr >= reserved_end || (addr - reserved_begin) % reserved_slot_size != 0) {
+    return nullptr;
+  }
+  const uint64_t index = (addr - reserved_begin) / reserved_slot_size;
+  bit = uint64_t{1} << (index % 64);
+  return &mapped_slots[index / 64];
+}
+}  // namespace
 
 void * map_area(
   const pid_t pid, const uint64_t shm_addr, const uint64_t shm_size, const bool writable)
@@ -108,9 +225,19 @@ void * map_area(
   }
 
   int prot = writable ? PROT_READ | PROT_WRITE : PROT_READ;
-  void * ret = mmap(
-    reinterpret_cast<void *>(shm_addr), shm_size, prot, MAP_SHARED | MAP_FIXED_NOREPLACE, shm_fd,
-    0);
+  uint64_t slot_bit = 0;
+  std::atomic<uint64_t> * slot_word = reserved_slot(shm_addr, shm_size, slot_bit);
+  void * ret = MAP_FAILED;
+  if (slot_word == nullptr) {
+    ret = mmap(
+      reinterpret_cast<void *>(shm_addr), shm_size, prot, MAP_SHARED | MAP_FIXED_NOREPLACE, shm_fd,
+      0);
+  } else if ((slot_word->fetch_or(slot_bit) & slot_bit) != 0) {
+    errno = EEXIST;  // already holds a heap; same failure as MAP_FIXED_NOREPLACE would give
+  } else {
+    ret = mmap(
+      reinterpret_cast<void *>(shm_addr), shm_size, prot, MAP_SHARED | MAP_FIXED, shm_fd, 0);
+  }
 
   if (ret == MAP_FAILED) {
     RCLCPP_ERROR(logger, "mmap failed: %s", strerror(errno));
@@ -496,6 +623,7 @@ struct initialize_hermos_result initialize_hermos(
     }
     exit(EXIT_FAILURE);
   }
+  reserve_heap_range(device_path);
 
   struct ioctl_get_version_args get_version_args = {};
   if (ioctl(hermos_fd, HERMOS_GET_VERSION_CMD, &get_version_args) < 0) {
