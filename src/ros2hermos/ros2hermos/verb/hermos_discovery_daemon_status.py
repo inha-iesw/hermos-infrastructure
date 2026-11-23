@@ -44,6 +44,9 @@ from ros2cli.node.strategy import NodeStrategy
 from ros2cli.verb import VerbExtension
 from ros2hermos._ioctl import _local_host_uuid, _local_ipc_ns_inode as _self_ipc_ns_inode
 from ros2hermos_discovery_agent.agent import _read_ros_domain_id
+from ros2hermos_discovery_agent.type_registry import (
+    TypeRegistryReader, _default_base_dir as _type_registry_base,
+)
 from ros2hermos_discovery_agent.observation.protocol import local_device_id, WRITER_BRIDGE
 
 from ros2hermos.discovery import (
@@ -52,12 +55,6 @@ from ros2hermos.discovery import (
     GOSSIP_TOPIC,
     warn_if_gossip_timeout_overridden,
 )
-
-
-def _type_registry_base() -> str:
-    """Resolve the tmpfs root, honoring ``HERMOS_TMPFS_DIR`` like the writer."""
-    root = os.environ.get('HERMOS_TMPFS_DIR') or '/dev/shm'
-    return os.path.join(root, 'hermos_type_registry')
 
 
 def _check_daemon_process(domain_id):
@@ -130,21 +127,19 @@ def _describe_type_registry(my_ns_inode) -> str:
     ``<pid>.txt`` files (process gone) are counted separately and don't count
     as live.
     """
-    ns_dir = os.path.join(_type_registry_base(), str(my_ns_inode))
-    if not os.path.isdir(ns_dir):
+    registry = TypeRegistryReader(my_ns_inode, _type_registry_base())
+    ns_dir = registry.ns_dir
+    try:
+        pids = registry.registered_pids()
+    except FileNotFoundError:
         return f'no Hermos process has registered yet ({ns_dir} absent)'
+    except OSError as exc:
+        return f'type registry unavailable ({ns_dir}): {exc}'
 
     live = 0
     stale = 0
-    for name in os.listdir(ns_dir):
-        if not name.endswith('.txt'):
-            continue
-
-        pid_str = name[:-len('.txt')]
-        if not pid_str.isdigit():
-            continue
-
-        if os.path.exists(f'/proc/{pid_str}'):
+    for pid in pids:
+        if os.path.exists(f'/proc/{pid}'):
             live += 1
         else:
             stale += 1

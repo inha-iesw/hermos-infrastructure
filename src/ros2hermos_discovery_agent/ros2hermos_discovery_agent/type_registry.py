@@ -1,7 +1,7 @@
 """Read hermoslib's per-process tmpfs type announcements.
 
 Each Hermos process appends tab-separated topic/type/role/node/domain/start-time lines to
-``/dev/shm/hermos_type_registry/<ipc_ns_inode>/<pid>.txt`` on each
+``/dev/shm/hermos_type_registry_<euid>/<ipc_ns_inode>/<pid>.txt`` on each
 ``Publisher<T>`` / ``Subscription<T>`` construction (see
 ``hermoslib::internal::TypeRegistryWriter``). The daemon walks the per-NS
 directory once per tick. PID hints require an exact domain and verified process
@@ -21,7 +21,10 @@ Forward-compatibility rules (parser contract):
   lifetime, not per rebuild) — corrupt files don't re-spam the log.
 """
 
+import errno
 import os
+import stat
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
 
@@ -42,10 +45,10 @@ def _default_base_dir() -> str:
     Mirrors `hermoslib::internal::TypeRegistryWriter`: read
     ``HERMOS_TMPFS_DIR`` if set (for hardened containers where
     ``/dev/shm`` is unavailable or too small) and append the
-    ``hermos_type_registry`` suffix.
+    ``hermos_type_registry_<euid>`` suffix.
     """
     root = os.environ.get('HERMOS_TMPFS_DIR') or '/dev/shm'
-    return os.path.join(root, 'hermos_type_registry')
+    return os.path.join(root, f'hermos_type_registry_{os.geteuid()}')
 
 
 BASE_DIR = _default_base_dir()
@@ -65,7 +68,7 @@ RegistryTable = Dict[Tuple[str, str, str, Optional[int], int], Optional[Registry
 
 
 class TypeRegistryReader:
-    """Scan ``${HERMOS_TMPFS_DIR:-/dev/shm}/hermos_type_registry/<ns_inode>/``
+    """Scan ``${HERMOS_TMPFS_DIR:-/dev/shm}/hermos_type_registry_<euid>/<ns_inode>/``
     and build an in-memory lookup table.
 
     The reader's *table* is stateless across ticks; each ``rebuild()`` call
@@ -77,8 +80,10 @@ class TypeRegistryReader:
     stays quiet afterwards.
     """
 
-    def __init__(self, ipc_ns_inode: int, base_dir: str = BASE_DIR, logger=None):
-        self._ns_dir = os.path.join(base_dir, str(ipc_ns_inode))
+    def __init__(self, ipc_ns_inode: int, base_dir: str | None = None, logger=None):
+        self._base_dir = _default_base_dir() if base_dir is None else base_dir
+        self._namespace = str(ipc_ns_inode)
+        self._ns_dir = os.path.join(self._base_dir, self._namespace)
         self._table: RegistryTable = {}
         self._by_endpoint: Dict[Tuple[str, str, str], RegistryTable] = {}
         self._process_starts: Dict[int, Optional[int]] = {}
@@ -93,41 +98,78 @@ class TypeRegistryReader:
     def table(self) -> RegistryTable:
         return self._table
 
+    @staticmethod
+    def _require_private_owner(metadata, *, directory):
+        correct_type = stat.S_ISDIR(metadata.st_mode) if directory else stat.S_ISREG(metadata.st_mode)
+        if (not correct_type or metadata.st_uid != os.geteuid() or metadata.st_mode & 0o077 or
+                (not directory and metadata.st_nlink != 1)):
+            raise PermissionError(errno.EACCES, 'registry object is not private to this user')
+
+    @contextmanager
+    def _namespace_directory(self):
+        # Pin both directories; never follow a replacement symlink during the scan.
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+        base_fd = os.open(self._base_dir, flags)
+        try:
+            self._require_private_owner(os.fstat(base_fd), directory=True)
+            ns_fd = os.open(self._namespace, flags, dir_fd=base_fd)
+            try:
+                self._require_private_owner(os.fstat(ns_fd), directory=True)
+                yield ns_fd
+            finally:
+                os.close(ns_fd)
+        finally:
+            os.close(base_fd)
+
+    def _private_files(self, directory_fd):
+        for name in os.listdir(directory_fd):
+            if not name.endswith('.txt'):
+                continue
+            try:
+                pid = int(name[:-4])
+                if pid <= 0:
+                    continue
+                fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
+                             dir_fd=directory_fd)
+            except (ValueError, OSError):
+                continue
+            try:
+                metadata = os.fstat(fd)
+                self._require_private_owner(metadata, directory=False)
+                yield name, pid, fd, metadata
+            except OSError:
+                continue
+            finally:
+                os.close(fd)
+
+    def registered_pids(self) -> list[int]:
+        """List private registration files for status output; raise on an unsafe directory."""
+        with self._namespace_directory() as directory_fd:
+            return [pid for _, pid, _, _ in self._private_files(directory_fd)]
+
     def rebuild(self) -> None:
-        """Re-scan ``ns_dir`` and replace the internal table."""
+        """Replace the table from same-user, private, non-symlink registry files."""
         new_table: RegistryTable = {}
         self._by_endpoint = {}
         self._process_starts = {}
         try:
-            entries = list(os.scandir(self._ns_dir))
+            with self._namespace_directory() as directory_fd:
+                for name, pid, fd, _ in self._private_files(directory_fd):
+                    self._ingest_file(fd, os.path.join(self._ns_dir, name), pid, new_table)
         except FileNotFoundError:
-            self._table = new_table
-            return
-        except PermissionError as exc:
+            pass
+        except OSError as exc:
             if self._logger is not None:
-                self._logger.warn(f'type_registry: cannot read {self._ns_dir}: {exc}')
-            self._table = new_table
-            return
-
-        for entry in entries:
-            if not entry.is_file() or not entry.name.endswith('.txt'):
-                continue
-            try:
-                pid = int(entry.name[:-len('.txt')])
-            except ValueError:
-                # Unexpected filename; skip silently.
-                continue
-            self._ingest_file(entry.path, pid, new_table)
-
+                self._logger.warning(f'type_registry: cannot read private registry: {exc}')
         self._table = new_table
         for key, value in new_table.items():
             self._by_endpoint.setdefault(key[:3], {})[key] = value
 
-    def _ingest_file(self, path: str, pid: int, table: RegistryTable) -> None:
+    def _ingest_file(self, fd: int, path: str, pid: int, table: RegistryTable) -> None:
         try:
-            with open(path, 'rb') as fp:
+            with os.fdopen(fd, 'rb', closefd=False) as fp:
                 data = fp.read()
-        except (FileNotFoundError, PermissionError):
+        except OSError:
             return
 
         if pid not in self._process_starts:
@@ -176,50 +218,29 @@ class TypeRegistryReader:
                 table[key] = value
 
     def cleanup_dead_pids(self) -> None:
-        """Remove tmpfs files whose owning PID is no longer alive.
-
-        Called once per tick before ``rebuild()``. The writer process is
-        responsible for unlinking its own file on graceful exit; this
-        sweep covers SIGKILL / crash cases.
-        """
+        """Remove dead-PID files only inside the verified private namespace directory."""
         try:
-            entries = list(os.scandir(self._ns_dir))
+            with self._namespace_directory() as directory_fd:
+                for name, pid, _, metadata in self._private_files(directory_fd):
+                    try:
+                        os.kill(pid, 0)
+                    except ProcessLookupError:
+                        pass
+                    except (PermissionError, OverflowError):
+                        continue
+                    else:
+                        continue
+                    try:
+                        current = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+                        if (current.st_dev, current.st_ino) == (metadata.st_dev, metadata.st_ino):
+                            os.unlink(name, dir_fd=directory_fd)
+                    except FileNotFoundError:
+                        pass
         except FileNotFoundError:
-            return
-        except PermissionError as exc:
+            pass
+        except OSError as exc:
             if self._logger is not None:
-                self._logger.warn(f'type_registry: cannot list {self._ns_dir} for cleanup: {exc}')
-            return
-
-        for entry in entries:
-            if not entry.is_file() or not entry.name.endswith('.txt'):
-                continue
-            try:
-                pid = int(entry.name[:-len('.txt')])
-            except ValueError:
-                continue
-            if pid <= 0:
-                continue
-            try:
-                os.kill(pid, 0)
-            except ProcessLookupError:
-                pass
-            except PermissionError:
-                # hidepid can hide /proc entries for a process that is alive.
-                continue
-            except OverflowError:
-                # A numeric filename need not fit the operating system's pid_t.
-                continue
-            else:
-                continue
-            try:
-                os.unlink(entry.path)
-            except FileNotFoundError:
-                pass
-            except PermissionError as exc:
-                if self._logger is not None:
-                    self._logger.warn(
-                        f'type_registry: failed to unlink stale {entry.path}: {exc}')
+                self._logger.warning(f'type_registry: cannot clean private registry: {exc}')
 
     def lookup(
         self, topic_name: str, role: str, node_name: str, *,

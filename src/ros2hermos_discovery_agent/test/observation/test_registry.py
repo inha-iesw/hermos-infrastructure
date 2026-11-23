@@ -11,12 +11,14 @@ def _reader(tmp_path, monkeypatch, starts):
     from ros2hermos_discovery_agent import type_registry
 
     monkeypatch.setattr(type_registry, '_process_start_ticks', lambda pid: starts.get(pid))
-    (tmp_path / '41').mkdir()
+    (tmp_path / '41').mkdir(mode=0o700)
     return TypeRegistryReader(41, str(tmp_path))
 
 
 def _write(reader, pid, *lines):
-    Path(reader.ns_dir, f'{pid}.txt').write_text(''.join(line + '\n' for line in lines))
+    path = Path(reader.ns_dir, f'{pid}.txt')
+    path.write_text(''.join(line + '\n' for line in lines))
+    path.chmod(0o600)
 
 
 def test_same_topic_and_node_are_resolved_separately_per_domain(tmp_path, monkeypatch):

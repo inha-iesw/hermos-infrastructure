@@ -24,10 +24,9 @@ namespace hermos::internal
 
 namespace
 {
-// Directories are world-readable so the daemon (possibly another user) can
-// scan them; the per-process file is 0644.
-constexpr mode_t kRegistryDirMode = 0755;
-constexpr mode_t kRegistryFileMode = 0644;
+// The discovery reader accepts only same-euid, private registry objects.
+constexpr mode_t kRegistryDirMode = 0700;
+constexpr mode_t kRegistryFileMode = 0600;
 
 // Tmpfs root. Default `/dev/shm` is world-writable (1777) so unelevated
 // user processes can create entries; override via `HERMOS_TMPFS_DIR`
@@ -35,25 +34,45 @@ constexpr mode_t kRegistryFileMode = 0644;
 std::string g_base_dir = []() {
   const char * env = std::getenv("HERMOS_TMPFS_DIR");
   std::string root = (env != nullptr && *env != '\0') ? env : "/dev/shm";
-  return root + "/hermos_type_registry";
+  return root + "/hermos_type_registry_" + std::to_string(geteuid());
 }();  // NOLINT(runtime/string)
 
-bool ensure_dir(const std::string & path, mode_t mode)
+int require_private_owner(int fd, bool directory)
 {
-  if (mkdir(path.c_str(), mode) == 0) {
-    return true;
+  if (fd == -1) return -1;
+  struct stat metadata{};
+  if (fstat(fd, &metadata) == 0) {
+    const bool correct_type = directory ? S_ISDIR(metadata.st_mode) : S_ISREG(metadata.st_mode);
+    if (correct_type && metadata.st_uid == geteuid() && !(metadata.st_mode & 0077) &&
+        (directory || metadata.st_nlink == 1)) {
+      return fd;
+    }
+    errno = EACCES;
   }
-  if (errno != EEXIST) {
-    return false;
+  const int error = errno;
+  close(fd);
+  errno = error;
+  return -1;
+}
+
+int open_private_directory(int parent_fd, const std::string & name)
+{
+  if (mkdirat(parent_fd, name.c_str(), kRegistryDirMode) != 0 && errno != EEXIST) {
+    return -1;
   }
-  // The path exists but might be a regular file (or a symlink to one).
-  // Confirm it's actually a directory so later operations don't fail with
-  // a misleading errno.
-  struct stat st = {};
-  if (::stat(path.c_str(), &st) != 0) {
-    return false;
+  return require_private_owner(
+    openat(parent_fd, name.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC), true);
+}
+
+int open_private_file(int parent_fd, const std::string & name)
+{
+  // NONBLOCK prevents a pre-existing FIFO from blocking before fstat rejects it.
+  const int flags = O_WRONLY | O_APPEND | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK;
+  int fd = openat(parent_fd, name.c_str(), flags | O_CREAT | O_EXCL, kRegistryFileMode);
+  if (fd == -1 && errno == EEXIST) {
+    fd = openat(parent_fd, name.c_str(), flags);
   }
-  return S_ISDIR(st.st_mode);
+  return require_private_owner(fd, false);
 }
 
 std::string process_start_ticks()
@@ -110,39 +129,46 @@ void TypeRegistryWriter::ensure_open_locked()
 
   // Any failure here means cross-NS observability silently breaks for
   // this process, so log as ERROR (not a transient warning).
-  if (!ensure_dir(g_base_dir, kRegistryDirMode)) {
+  const int base_fd = open_private_directory(AT_FDCWD, g_base_dir);
+  if (base_fd == -1) {
     RCLCPP_ERROR(
       rclcpp::get_logger("Hermos"),
-      "TypeRegistryWriter: mkdir '%s' failed: %s. Cross-NS observability will "
+      "TypeRegistryWriter: open private directory '%s' failed: %s. Cross-NS observability will "
       "silently NOT work in this process. Override the root with "
       "HERMOS_TMPFS_DIR if /dev/shm is unavailable.",
       g_base_dir.c_str(), std::strerror(errno));
     open_failed_warned_ = true;
     return;
   }
-  const std::string ns_dir = g_base_dir + "/" + std::to_string(ns_inode);
-  if (!ensure_dir(ns_dir, kRegistryDirMode)) {
+  const std::string ns_name = std::to_string(ns_inode);
+  const std::string ns_dir = g_base_dir + "/" + ns_name;
+  const int ns_fd = open_private_directory(base_fd, ns_name);
+  const int ns_error = errno;
+  close(base_fd);
+  if (ns_fd == -1) {
     RCLCPP_ERROR(
       rclcpp::get_logger("Hermos"),
-      "TypeRegistryWriter: mkdir '%s' failed: %s. Check tmpfs free space.", ns_dir.c_str(),
-      std::strerror(errno));
+      "TypeRegistryWriter: open private directory '%s' failed: %s.", ns_dir.c_str(),
+      std::strerror(ns_error));
     open_failed_warned_ = true;
     return;
   }
 
-  path_ = ns_dir + "/" + std::to_string(getpid()) + ".txt";
-  fd_ = ::open(
-    path_.c_str(), O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC,
-    kRegistryFileMode);  // NOLINT(runtime/int)
+  const std::string filename = std::to_string(getpid()) + ".txt";
+  fd_ = open_private_file(ns_fd, filename);
+  const int file_error = errno;
+  close(ns_fd);
   if (fd_ == -1) {
     RCLCPP_ERROR(
       rclcpp::get_logger("Hermos"),
-      "TypeRegistryWriter: open('%s') failed: %s. Check the parent directory "
+      "TypeRegistryWriter: open private file '%s/%s' failed: %s. Check the parent directory "
       "permissions and the tmpfs free space.",
-      path_.c_str(), std::strerror(errno));
+      ns_dir.c_str(), filename.c_str(), std::strerror(file_error));
     open_failed_warned_ = true;
     return;
   }
+  // A rejected existing file must never become an atexit cleanup target.
+  path_ = ns_dir + "/" + filename;
   // Kernel process registration fixes its domain for its lifetime. Keep the
   // writer's identity stable too; a zero start identity permits type hints only,
   // never verified PID attribution.

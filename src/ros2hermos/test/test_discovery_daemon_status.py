@@ -82,7 +82,7 @@ def test_describe_type_registry_missing_dir():
 def test_describe_type_registry_empty_dir():
     with tempfile.TemporaryDirectory() as tmpdir:
         ns_inode = 12345
-        os.makedirs(os.path.join(tmpdir, str(ns_inode)))
+        os.makedirs(os.path.join(tmpdir, str(ns_inode)), mode=0o700)
         with patch.object(ds, '_type_registry_base', return_value=tmpdir):
             detail = ds._describe_type_registry(ns_inode)
         assert 'no Hermos process has registered yet' in detail
@@ -92,10 +92,11 @@ def test_describe_type_registry_with_live_pid_reports_count():
     with tempfile.TemporaryDirectory() as tmpdir:
         ns_inode = 12345
         ns_dir = os.path.join(tmpdir, str(ns_inode))
-        os.makedirs(ns_dir)
+        os.makedirs(ns_dir, mode=0o700)
         # Name the file after our own PID so /proc/<pid> is guaranteed live.
         with open(os.path.join(ns_dir, f'{os.getpid()}.txt'), 'w') as fp:
             fp.write('/topic\ttype\tpub\t/node\n')
+        os.chmod(fp.name, 0o600)
         with patch.object(ds, '_type_registry_base', return_value=tmpdir):
             detail = ds._describe_type_registry(ns_inode)
         assert '1 live registration' in detail
@@ -106,10 +107,11 @@ def test_describe_type_registry_stale_pid_noted():
     with tempfile.TemporaryDirectory() as tmpdir:
         ns_inode = 12345
         ns_dir = os.path.join(tmpdir, str(ns_inode))
-        os.makedirs(ns_dir)
+        os.makedirs(ns_dir, mode=0o700)
         # PID 999999999 is unlikely to be alive.
         with open(os.path.join(ns_dir, '999999999.txt'), 'w') as fp:
             fp.write('/topic\ttype\tpub\t/node\n')
+        os.chmod(fp.name, 0o600)
         with patch.object(ds, '_type_registry_base', return_value=tmpdir):
             detail = ds._describe_type_registry(ns_inode)
         assert 'stale' in detail
@@ -185,10 +187,10 @@ def test_missing_boot_id_makes_gossip_unverifiable():
 def test_type_registry_base_honors_hermos_tmpfs_dir(monkeypatch):
     """`HERMOS_TMPFS_DIR` overrides the `/dev/shm` default consistently with the writer."""
     monkeypatch.setenv('HERMOS_TMPFS_DIR', '/run/custom')
-    assert ds._type_registry_base() == '/run/custom/hermos_type_registry'
+    assert ds._type_registry_base() == f'/run/custom/hermos_type_registry_{os.geteuid()}'
 
     monkeypatch.delenv('HERMOS_TMPFS_DIR', raising=False)
-    assert ds._type_registry_base() == '/dev/shm/hermos_type_registry'
+    assert ds._type_registry_base() == f'/dev/shm/hermos_type_registry_{os.geteuid()}'
 
 
 # --- verdict (main) ---------------------------------------------------------

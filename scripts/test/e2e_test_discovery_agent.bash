@@ -137,7 +137,7 @@ green "✓ gossip carries type_name + non-zero pid from the tmpfs type registry"
 
 # ----- assert the tmpfs file the agent reads from is actually there -----
 NS_INODE=$(stat -L -c '%i' /proc/self/ns/ipc)
-TMPFS_DIR="${HERMOS_TMPFS_DIR:-/dev/shm}/hermos_type_registry/$NS_INODE"
+TMPFS_DIR="${HERMOS_TMPFS_DIR:-/dev/shm}/hermos_type_registry_${EUID}/$NS_INODE"
 [ -d "$TMPFS_DIR" ] || fail "tmpfs registry dir missing: $TMPFS_DIR"
 # Match the talker's row rather than relying on another process's file mtime.
 # Per-process format: <topic>\t<type>\t<role>\t<node>\t<domain>\t<start_ticks>\n.

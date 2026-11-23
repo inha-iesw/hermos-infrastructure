@@ -224,9 +224,10 @@ def test_real_registry_type_hint_preserves_bridge_type_without_guessing_pid(
 
     monkeypatch.setattr(type_registry, '_process_start_ticks', lambda pid: None)
     directory = tmp_path / '42'
-    directory.mkdir()
+    directory.mkdir(mode=0o700)
     (directory / '123.txt').write_text(
         '/chatter\tstd_msgs/msg/Int32\tpub\t/talker_node' + extension + '\n')
+    (directory / '123.txt').chmod(0o600)
     registry = type_registry.TypeRegistryReader(42, str(tmp_path))
     registry.rebuild()
     lib = _make_mock_lib({'/chatter': {'pub': [_make_info('/talker_node')], 'sub': []}})

@@ -153,6 +153,15 @@ if(BUILD_TESTING)
     ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1;HERMOS_TEST_PREFIX=${CMAKE_INSTALL_PREFIX}")
 
   # Unit tests
+  add_executable(test_registry_writer_probe test/registry/writer_probe.cpp)
+  target_link_libraries(test_registry_writer_probe hermos)
+  add_test(NAME test_registry_writer_reader
+    COMMAND "${Python3_EXECUTABLE}" -m pytest -q -p no:cacheprovider
+      "${CMAKE_CURRENT_SOURCE_DIR}/test/registry/test_writer_reader.py"
+      "--junitxml=${CMAKE_CURRENT_BINARY_DIR}/test_results/${PROJECT_NAME}/test_registry_writer_reader.xunit.xml")
+  set_tests_properties(test_registry_writer_reader PROPERTIES TIMEOUT 30
+    ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1;HERMOS_REGISTRY_WRITER_PROBE=$<TARGET_FILE:test_registry_writer_probe>;PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/../ros2hermos_discovery_agent:$ENV{PYTHONPATH}")
+
   find_package(rosidl_typesupport_cpp REQUIRED)
   ament_add_gmock(test_unit_${PROJECT_NAME}
     test/unit/test_hermos_utils.cpp

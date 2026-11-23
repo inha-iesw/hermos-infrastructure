@@ -18,6 +18,8 @@
 
 #include <gtest/gtest.h>
 #include <unistd.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
 
 #include <cstdio>
 #include <cstdlib>
@@ -147,6 +149,134 @@ TEST_F(TypeRegistryWriterTest, ConcurrentRegisterTypeDoesNotInterleaveLines)
   }
   // Every register_type call must produce exactly one line.
   EXPECT_EQ(count, kThreads * kPerThread);
+}
+
+TEST_F(TypeRegistryWriterTest, CreatesPrivateNamespaceDirectoryAndFile)
+{
+  auto & writer = hermos::internal::TypeRegistryWriter::instance();
+  writer.register_type("/topic", "Type", "pub", "/node");
+  const std::string path = writer.current_path_for_test();
+  ASSERT_FALSE(path.empty());
+  for (const auto & object : {std::filesystem::path(path), std::filesystem::path(path).parent_path()}) {
+    struct stat metadata{};
+    ASSERT_EQ(stat(object.c_str(), &metadata), 0);
+    EXPECT_EQ(metadata.st_uid, geteuid());
+    EXPECT_EQ(metadata.st_mode & 0077, 0);
+  }
+}
+
+TEST_F(TypeRegistryWriterTest, RejectsPublicBaseWithoutChangingItsPermissions)
+{
+  ASSERT_EQ(chmod(base_dir_.c_str(), 0755), 0);
+  auto & writer = hermos::internal::TypeRegistryWriter::instance();
+  writer.register_type("/topic", "Type", "pub", "/node");
+  EXPECT_TRUE(writer.current_path_for_test().empty());
+  struct stat metadata{};
+  ASSERT_EQ(stat(base_dir_.c_str(), &metadata), 0);
+  EXPECT_EQ(metadata.st_mode & 0777, 0755);
+  EXPECT_TRUE(std::filesystem::is_empty(base_dir_));
+}
+
+TEST_F(TypeRegistryWriterTest, RejectsSymlinkNamespaceWithoutWritingItsTarget)
+{
+  const auto target = std::filesystem::path(base_dir_) / "target";
+  ASSERT_EQ(mkdir(target.c_str(), 0700), 0);
+  std::filesystem::create_directory_symlink(
+    target, std::filesystem::path(base_dir_) / std::to_string(hermos::get_self_ipc_ns_inode()));
+  auto & writer = hermos::internal::TypeRegistryWriter::instance();
+  writer.register_type("/topic", "Type", "pub", "/node");
+  EXPECT_TRUE(writer.current_path_for_test().empty());
+  EXPECT_TRUE(std::filesystem::is_empty(target));
+}
+
+TEST_F(TypeRegistryWriterTest, RejectsUnsafeExistingFilesWithoutAppending)
+{
+  const auto ns_dir = std::filesystem::path(base_dir_) / std::to_string(hermos::get_self_ipc_ns_inode());
+  ASSERT_EQ(mkdir(ns_dir.c_str(), 0700), 0);
+  const auto path = ns_dir / (std::to_string(getpid()) + ".txt");
+  const auto target = std::filesystem::path(base_dir_) / "target.txt";
+  for (const std::string kind : {"public", "symlink", "hardlink"}) {
+    SCOPED_TRACE(kind);
+    hermos::internal::TypeRegistryWriter::instance().reset_for_test();
+    std::ofstream(target) << "original";
+    ASSERT_EQ(chmod(target.c_str(), 0600), 0);
+    if (kind == "public") {
+      std::filesystem::rename(target, path);
+      ASSERT_EQ(chmod(path.c_str(), 0644), 0);
+    } else if (kind == "symlink") {
+      std::filesystem::create_symlink(target, path);
+    } else {
+      std::filesystem::create_hard_link(target, path);
+    }
+    auto & writer = hermos::internal::TypeRegistryWriter::instance();
+    writer.register_type("/topic", "Type", "pub", "/node");
+    EXPECT_TRUE(writer.current_path_for_test().empty());
+    EXPECT_EQ(read_file(path.string()), "original");
+    std::filesystem::remove(path);
+    std::filesystem::remove(target);
+  }
+}
+
+TEST_F(TypeRegistryWriterTest, RejectsSymlinkBaseWithoutWritingItsTarget)
+{
+  const auto target = std::filesystem::path(base_dir_) / "target";
+  const auto alias = std::filesystem::path(base_dir_) / "alias";
+  ASSERT_EQ(mkdir(target.c_str(), 0700), 0);
+  std::filesystem::create_directory_symlink(target, alias);
+  hermos::internal::TypeRegistryWriter::set_base_dir_for_test(alias.string());
+  auto & writer = hermos::internal::TypeRegistryWriter::instance();
+  writer.register_type("/topic", "Type", "pub", "/node");
+  EXPECT_TRUE(writer.current_path_for_test().empty());
+  EXPECT_TRUE(std::filesystem::is_empty(target));
+}
+
+TEST_F(TypeRegistryWriterTest, RejectsPublicNamespaceWithoutChangingIt)
+{
+  const auto ns_dir = std::filesystem::path(base_dir_) / std::to_string(hermos::get_self_ipc_ns_inode());
+  ASSERT_EQ(mkdir(ns_dir.c_str(), 0700), 0);
+  ASSERT_EQ(chmod(ns_dir.c_str(), 0755), 0);
+  auto & writer = hermos::internal::TypeRegistryWriter::instance();
+  writer.register_type("/topic", "Type", "pub", "/node");
+  EXPECT_TRUE(writer.current_path_for_test().empty());
+  struct stat metadata{};
+  ASSERT_EQ(stat(ns_dir.c_str(), &metadata), 0);
+  EXPECT_EQ(metadata.st_mode & 0777, 0755);
+  EXPECT_TRUE(std::filesystem::is_empty(ns_dir));
+}
+
+TEST_F(TypeRegistryWriterTest, ReopensPrivateFileWithoutTruncatingIt)
+{
+  auto & writer = hermos::internal::TypeRegistryWriter::instance();
+  writer.register_type("/first", "Type", "pub", "/node");
+  const std::string path = writer.current_path_for_test();
+  const std::string first = read_file(path);
+  writer.reset_for_test();
+  writer.register_type("/second", "Type", "sub", "/node");
+  EXPECT_EQ(writer.current_path_for_test(), path);
+  const auto body = read_file(path);
+  EXPECT_EQ(body.substr(0, first.size()), first);
+  EXPECT_NE(body.find("/second\tType\tsub\t/node\t"), std::string::npos);
+}
+
+TEST_F(TypeRegistryWriterTest, RejectsExistingFifoWithoutBlocking)
+{
+  const auto ns_dir = std::filesystem::path(base_dir_) / std::to_string(hermos::get_self_ipc_ns_inode());
+  ASSERT_EQ(mkdir(ns_dir.c_str(), 0700), 0);
+  const pid_t child = fork();
+  ASSERT_GE(child, 0);
+  if (child == 0) {
+    const auto path = ns_dir / (std::to_string(getpid()) + ".txt");
+    if (mkfifo(path.c_str(), 0600) != 0) _exit(2);
+    // A blocking open would otherwise hang the entire host gate.
+    alarm(2);
+    auto & writer = hermos::internal::TypeRegistryWriter::instance();
+    writer.register_type("/topic", "Type", "pub", "/node");
+    _exit(writer.current_path_for_test().empty() ? 0 : 1);
+  }
+  int status = 0;
+  ASSERT_EQ(waitpid(child, &status, 0), child);
+  ASSERT_TRUE(WIFEXITED(status));
+  EXPECT_EQ(WEXITSTATUS(status), 0);
 }
 
 }  // namespace

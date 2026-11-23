@@ -4,7 +4,10 @@
 // Per-process file writer that announces every `Publisher<T>` and
 // `Subscription<T>` registration to the per-IPC-namespace
 // `ros2hermos_discovery_agent` via a tmpfs file under
-// `/dev/shm/hermos_type_registry/<ipc_ns_inode>/<pid>.txt`.
+// `/dev/shm/hermos_type_registry_<euid>/<ipc_ns_inode>/<pid>.txt`.
+// Directories are created with 0700 and files with 0600. Existing objects must
+// belong to the effective user, grant no group/other access, and not be symlinks;
+// existing files must also be regular files with exactly one link.
 //
 // Each line is tab-separated and `\n`-terminated:
 //
@@ -50,7 +53,7 @@ public:
     const std::string & node_name);
 
   // Test seam: override the tmpfs base directory (default
-  // `/dev/shm/hermos_type_registry`). Must be called before the first
+  // `/dev/shm/hermos_type_registry_<euid>`). Must be called before the first
   // `register_type`.
   static void set_base_dir_for_test(const std::string & dir);
 
