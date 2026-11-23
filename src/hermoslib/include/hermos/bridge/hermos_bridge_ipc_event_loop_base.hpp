@@ -62,6 +62,9 @@ private:
   int signal_fd_ = -1;
   int socket_fd_ = -1;
 
+  // Pin admission to the identity under which these socket names were bound.
+  const uid_t owner_uid_;
+  const uint64_t ipc_ns_inode_;
   int listener_fd_ = -1;
   std::string uds_addr_;
   std::vector<uint8_t> recv_buf_;
@@ -87,7 +90,8 @@ private:
 inline IpcEventLoopBase::IpcEventLoopBase(
   const rclcpp::Logger & logger, const std::string & uds_addr, std::size_t max_msg_size,
   const std::vector<int> & signals_to_block, const std::vector<int> & signals_to_ignore)
-: logger_(logger), uds_addr_(uds_addr), recv_buf_(max_msg_size)
+: logger_(logger), owner_uid_(geteuid()), ipc_ns_inode_(get_self_ipc_ns_inode()),
+  uds_addr_(uds_addr), recv_buf_(max_msg_size)
 {
   try {
     setup_listener();
@@ -157,6 +161,10 @@ inline void IpcEventLoopBase::handle_signal()
 
 inline void IpcEventLoopBase::handle_socket(int client_fd)
 {
+  if (!detail::bridge_stream_peer_allowed(client_fd, owner_uid_, ipc_ns_inode_)) {
+    RCLCPP_WARN(logger_, "Rejected debug socket peer outside this UID/IPC namespace");
+    return;
+  }
   if (!socket_cb_) {
     return;
   }
@@ -219,12 +227,26 @@ inline void IpcEventLoopBase::set_socket_handler(SocketCallback cb)
 inline void IpcEventLoopBase::drain_listener()
 {
   while (true) {
-    ssize_t n = recv(listener_fd_, recv_buf_.data(), recv_buf_.size(), 0);
+    alignas(cmsghdr) unsigned char control[CMSG_SPACE(sizeof(ucred))]{};
+    iovec payload{recv_buf_.data(), recv_buf_.size()};
+    msghdr message{};
+    message.msg_iov = &payload;
+    message.msg_iovlen = 1;
+    message.msg_control = control;
+    message.msg_controllen = sizeof(control);
+    ssize_t n = recvmsg(listener_fd_, &message, MSG_TRUNC | MSG_CMSG_CLOEXEC);
     if (n < 0) {
       if (errno == EAGAIN || errno == EWOULDBLOCK) break;
       if (errno == EINTR) continue;
-      RCLCPP_WARN(logger_, "bridge UDS recv() failed: %s", strerror(errno));
+      RCLCPP_WARN(logger_, "bridge UDS recvmsg() failed: %s", strerror(errno));
       break;
+    }
+    ucred credentials{};
+    const bool valid_credentials = detail::read_bridge_credentials(message, credentials);
+    if (static_cast<size_t>(n) > recv_buf_.size() || !valid_credentials ||
+        !detail::bridge_peer_allowed(credentials, owner_uid_, ipc_ns_inode_)) {
+      RCLCPP_WARN(logger_, "Rejected bridge datagram with invalid size or peer credentials");
+      continue;
     }
     if (message_cb_) {
       message_cb_(recv_buf_.data(), static_cast<size_t>(n));
@@ -253,8 +275,8 @@ inline void IpcEventLoopBase::setup_signals(
 //
 // Communication is one-way (Bridge process -> CLI): when a client connects, the
 // string returned by socket_cb_ is immediately sent to the client and the
-// connection is closed. The server never reads from the client; the act of
-// connecting is itself the trigger.
+// connection is closed. Only a peer authenticated by SO_PEERCRED as the same
+// UID and IPC namespace can trigger the status callback.
 //
 // Currently this socket is used for liveness checks: the CLI connects to
 // confirm the Bridge process is running and receives a status string in

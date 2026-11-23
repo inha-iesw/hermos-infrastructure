@@ -1,4 +1,5 @@
 #include "hermos/bridge/hermos_bridge_uds.hpp"
+#include "hermos/bridge/hermos_bridge_ipc_event_loop_base.hpp"
 
 #include <rclcpp/logger.hpp>
 #include <rclcpp/logging.hpp>
@@ -164,4 +165,178 @@ TEST(BridgeUdsSendTest, InvalidAddressFailsFast)
   // BRIDGE_UDS_SEND_MAX_RETRIES * BRIDGE_UDS_SEND_RETRY_INTERVAL_US retrying.
   EXPECT_FALSE(hermos::send_bridge_uds_message("", &byte, sizeof(byte), logger));
   EXPECT_FALSE(hermos::send_bridge_uds_message("no-nul", &byte, sizeof(byte), logger));
+}
+
+
+TEST(BridgeUdsListenerTest, RequestsKernelCredentials)
+{
+  ScopedFd listener(hermos::create_bridge_uds_listener(make_unique_abstract_addr("credentials")));
+  int enabled = 0;
+  socklen_t size = sizeof(enabled);
+  ASSERT_EQ(getsockopt(listener.get(), SOL_SOCKET, SO_PASSCRED, &enabled, &size), 0);
+  EXPECT_EQ(enabled, 1);
+}
+
+TEST(BridgeUdsReceiveTest, AcceptedLocalDatagramReachesHandler)
+{
+  const auto address = make_unique_abstract_addr("authorized");
+  const auto logger = rclcpp::get_logger("BridgeUdsReceiveTest");
+  hermos::IpcEventLoopBase loop(logger, address, 4, {}, {});
+  std::string received;
+  loop.set_message_handler([&](const void * data, size_t size) {
+    received.assign(static_cast<const char *>(data), size);
+  });
+  ASSERT_TRUE(hermos::send_bridge_uds_message(address, "test", 4, logger));
+  ASSERT_TRUE(loop.spin_once(100));
+  EXPECT_EQ(received, "test");
+}
+
+TEST(BridgeUdsReceiveTest, OversizedDatagramIsDroppedBeforeHandler)
+{
+  const auto address = make_unique_abstract_addr("oversized");
+  const auto logger = rclcpp::get_logger("BridgeUdsReceiveTest");
+  hermos::IpcEventLoopBase loop(logger, address, 4, {}, {});
+  unsigned calls = 0;
+  loop.set_message_handler([&](const void *, size_t) {++calls;});
+  ASSERT_TRUE(hermos::send_bridge_uds_message(address, "oversized", 9, logger));
+  ASSERT_TRUE(loop.spin_once(100));
+  EXPECT_EQ(calls, 0u);
+  ASSERT_TRUE(hermos::send_bridge_uds_message(address, "good", 4, logger));
+  ASSERT_TRUE(loop.spin_once(100));
+  EXPECT_EQ(calls, 1u);
+}
+
+
+TEST(BridgePeerCredentials, RequiresSameUidAndIpcNamespace)
+{
+  const ucred credentials{getpid(), geteuid(), getegid()};
+  const auto ipc_ns = hermos::get_self_ipc_ns_inode();
+  EXPECT_TRUE(hermos::detail::bridge_peer_allowed(credentials, geteuid(), ipc_ns));
+  const uid_t different_uid = geteuid() == 0 ? 1 : 0;
+  EXPECT_FALSE(hermos::detail::bridge_peer_allowed(credentials, different_uid, ipc_ns));
+  EXPECT_FALSE(hermos::detail::bridge_peer_allowed(credentials, geteuid(), ipc_ns + 1));
+  EXPECT_FALSE(hermos::detail::bridge_peer_allowed(credentials, geteuid(), 0));
+  EXPECT_FALSE(hermos::detail::bridge_peer_allowed(ucred{0, geteuid(), getegid()}, geteuid(), ipc_ns));
+}
+
+TEST(BridgePeerCredentials, MissingAndMalformedCredentialsAreRejected)
+{
+  msghdr message{};
+  ucred result{};
+  EXPECT_FALSE(hermos::detail::read_bridge_credentials(message, result));
+  alignas(cmsghdr) unsigned char control[CMSG_SPACE(sizeof(ucred))]{};
+  message.msg_control = control;
+  message.msg_controllen = sizeof(control);
+  auto * header = CMSG_FIRSTHDR(&message);
+  header->cmsg_level = SOL_SOCKET;
+  header->cmsg_type = SCM_CREDENTIALS;
+  header->cmsg_len = CMSG_LEN(sizeof(ucred)) - 1;
+  EXPECT_FALSE(hermos::detail::read_bridge_credentials(message, result));
+  header->cmsg_len = sizeof(control) + 1;
+  EXPECT_FALSE(hermos::detail::read_bridge_credentials(message, result));
+  header->cmsg_len = CMSG_LEN(0) - 1;
+  EXPECT_FALSE(hermos::detail::read_bridge_credentials(message, result));
+}
+
+TEST(BridgePeerCredentials, CompleteCredentialsAreRequiredWithoutTruncation)
+{
+  alignas(cmsghdr) unsigned char control[CMSG_SPACE(sizeof(ucred))]{};
+  msghdr message{};
+  message.msg_control = control;
+  message.msg_controllen = sizeof(control);
+  auto * header = CMSG_FIRSTHDR(&message);
+  header->cmsg_level = SOL_SOCKET;
+  header->cmsg_type = SCM_CREDENTIALS;
+  header->cmsg_len = CMSG_LEN(sizeof(ucred));
+  const ucred expected{getpid(), geteuid(), getegid()};
+  std::memcpy(CMSG_DATA(header), &expected, sizeof(expected));
+  ucred result{};
+  ASSERT_TRUE(hermos::detail::read_bridge_credentials(message, result));
+  EXPECT_EQ(result.pid, expected.pid);
+  EXPECT_EQ(result.uid, expected.uid);
+  EXPECT_EQ(result.gid, expected.gid);
+  for (int flags : {MSG_TRUNC, MSG_CTRUNC}) {
+    message.msg_flags = flags;
+    EXPECT_FALSE(hermos::detail::read_bridge_credentials(message, result));
+  }
+}
+
+TEST(BridgePeerCredentials, DuplicateCredentialsAreRejected)
+{
+  alignas(cmsghdr) unsigned char control[2 * CMSG_SPACE(sizeof(ucred))]{};
+  msghdr message{};
+  message.msg_control = control;
+  message.msg_controllen = sizeof(control);
+  const ucred expected{getpid(), geteuid(), getegid()};
+  auto * header = CMSG_FIRSTHDR(&message);
+  for (int index = 0; index < 2; ++index) {
+    ASSERT_NE(header, nullptr);
+    header->cmsg_level = SOL_SOCKET;
+    header->cmsg_type = SCM_CREDENTIALS;
+    header->cmsg_len = CMSG_LEN(sizeof(ucred));
+    std::memcpy(CMSG_DATA(header), &expected, sizeof(expected));
+    header = CMSG_NXTHDR(&message, header);
+  }
+  ucred result{};
+  EXPECT_FALSE(hermos::detail::read_bridge_credentials(message, result));
+}
+
+TEST(BridgePeerCredentials, UnexpectedRightsAreClosedBeforeRejection)
+{
+  int pipe_fds[2];
+  ASSERT_EQ(pipe(pipe_fds), 0);
+  ScopedFd writer(pipe_fds[1]);
+  alignas(cmsghdr) unsigned char control[CMSG_SPACE(sizeof(int))]{};
+  msghdr message{};
+  message.msg_control = control;
+  message.msg_controllen = sizeof(control);
+  auto * header = CMSG_FIRSTHDR(&message);
+  header->cmsg_level = SOL_SOCKET;
+  header->cmsg_type = SCM_RIGHTS;
+  header->cmsg_len = CMSG_LEN(sizeof(int));
+  std::memcpy(CMSG_DATA(header), &pipe_fds[0], sizeof(int));
+  ucred result{};
+  EXPECT_FALSE(hermos::detail::read_bridge_credentials(message, result));
+  EXPECT_EQ(fcntl(pipe_fds[0], F_GETFD), -1);
+  EXPECT_EQ(errno, EBADF);
+}
+
+namespace
+{
+class TestBridgeEventLoop : public hermos::IpcEventLoopBase
+{
+public:
+  using IpcEventLoopBase::IpcEventLoopBase;
+  using IpcEventLoopBase::handle_socket;
+};
+}  // namespace
+
+TEST(BridgeDebugCredentials, UnknownPeerCannotInvokeStatusHandler)
+{
+  TestBridgeEventLoop loop(rclcpp::get_logger("BridgeDebugCredentials"),
+                          make_unique_abstract_addr("debug_rejected"), 4, {}, {});
+  unsigned calls = 0;
+  loop.set_socket_handler([&] {++calls; return "private status";});
+  loop.handle_socket(-1);
+  EXPECT_EQ(calls, 0u);
+}
+
+TEST(BridgeDebugCredentials, AuthenticatedLocalPeerReceivesStatus)
+{
+  TestBridgeEventLoop loop(rclcpp::get_logger("BridgeDebugCredentials"),
+                          make_unique_abstract_addr("debug_authorized"), 4, {}, {});
+  int sockets[2];
+  ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0, sockets), 0);
+  ScopedFd server(sockets[0]);
+  ScopedFd client(sockets[1]);
+  unsigned calls = 0;
+  loop.set_socket_handler([&] {++calls; return "status";});
+  loop.handle_socket(server.get());
+  EXPECT_EQ(calls, 1u);
+  char response[16]{};
+  ASSERT_EQ(recv(client.get(), response, sizeof(response), 0), 6);
+  EXPECT_EQ(std::string(response, 6), "status");
+  const uid_t different_uid = geteuid() == 0 ? 1 : 0;
+  EXPECT_FALSE(hermos::detail::bridge_stream_peer_allowed(
+    server.get(), different_uid, hermos::get_self_ipc_ns_inode()));
 }
