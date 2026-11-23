@@ -154,6 +154,23 @@ def test_node_list_counts_scopes_instead_of_collapsing_equal_fqns(capsys):
     assert capsys.readouterr().out.strip() == '2'
 
 
+def test_node_list_scans_each_scope_once_for_many_endpoints(capsys):
+    from ros2hermos.verb import node_list_hermos as module
+
+    snapshot = state('large')
+    snapshot.topics[0].publishers = [HermosEndpoint(node_name=f'/node_{index}', pid=index + 1)
+                                   for index in range(200)]
+    with patch.object(module, 'NodeStrategy', node_strategy()), \
+            patch.object(module, 'get_node_names', return_value=[]), \
+            patch('ros2hermos.discovery.collect_announcements', return_value=[snapshot]), \
+            patch.object(module, 'all_nodes', wraps=module.all_nodes) as scan:
+        NodeListHermosVerb().main(args=args())
+    rows = capsys.readouterr().out.splitlines()
+    assert len(rows) == 200
+    assert {row.split()[0] for row in rows} == {f'/node_{index}' for index in range(200)}
+    assert scan.call_count <= 2
+
+
 def test_node_info_rejects_ambiguous_native_fqn():
     with patch('ros2hermos.verb.node_info_hermos.NodeStrategy', node_strategy()), \
             patch('ros2hermos.verb.node_info_hermos.get_node_names', return_value=[]), \

@@ -43,10 +43,12 @@ class ListHermosVerb(VerbExtension):
                 scopes = scopes_for_args(collect_for_args(node, args), node, args)
             except ValueError as exc:
                 return str(exc)
-            snapshots = [state for _, state in scopes]
-
             # Get node names which contains Hermos topics from gossip.
-            hermos_node_name = all_nodes(snapshots)
+            scopes_by_node = {}
+            for scope, state in scopes:
+                for name in all_nodes([state]):
+                    scopes_by_node.setdefault(name, []).append(scope)
+            hermos_node_name = set(scopes_by_node)
 
             # TODO(bdm-k): The current impl determines shadow nodes in a heuristic way. We need to
             # invent a deterministic way to identify shadow nodes.
@@ -98,10 +100,9 @@ class ListHermosVerb(VerbExtension):
             for node_name in sorted(merged_node_name):
                 if node_name in ros2_node_name and node_name not in hermos_node_name:
                     rows.append(node_name)
-                for scope, state in scopes:
-                    if node_name in all_nodes([state]):
-                        label = 'Hermos enabled, DDS' if node_name in ros2_node_name else 'Hermos enabled'
-                        rows.append(f'{node_name} ({label}) [{scope_label(scope)}]')
+                for scope in scopes_by_node.get(node_name, ()):
+                    label = 'Hermos enabled, DDS' if node_name in ros2_node_name else 'Hermos enabled'
+                    rows.append(f'{node_name} ({label}) [{scope_label(scope)}]')
             if args.count_nodes:
                 print(len(rows))
             else:
